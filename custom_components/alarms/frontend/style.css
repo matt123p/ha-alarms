@@ -1,0 +1,7 @@
+/*
+ * CSS for Alarms custom component frontend.
+ *
+ * NOTE: The styles for the Alarms Web Component are encapsulated
+ * directly within the Shadow DOM inside `alarm-card.js`.
+ * This prevents style bleed between Home Assistant dashboards and the card.
+ */

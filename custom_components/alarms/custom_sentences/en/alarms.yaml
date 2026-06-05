@@ -1,0 +1,20 @@
+language: "en"
+intents:
+  AlarmsSnooze:
+    data:
+      - sentences:
+          - "snooze alarm"
+          - "snooze [the] alarm"
+          - "snooze my alarm"
+          - "snooze"
+  AlarmsDismiss:
+    data:
+      - sentences:
+          - "stop alarm"
+          - "stop [the] alarm"
+          - "dismiss [the] alarm"
+          - "turn off [the] alarm"
+          - "dismiss alarm"
+          - "turn off alarm"
+          - "silence alarm"
+          - "silence [the] alarm"
