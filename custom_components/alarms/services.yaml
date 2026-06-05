@@ -1,0 +1,269 @@
+create:
+  name: Create Alarm
+  description: Create a new alarm clock or reminder.
+  fields:
+    name:
+      name: Name
+      description: The name or label for the alarm.
+      required: true
+      example: "Morning Wakeup"
+      selector:
+        text:
+    time:
+      name: Time
+      description: The time for the alarm to trigger (HH:MM or HH:MM:SS format).
+      required: true
+      example: "07:30:00"
+      selector:
+        text:
+    color:
+      name: Color
+      description: Hex color code representing the theme color of the alarm card.
+      required: false
+      default: "#3498db"
+      example: "#2ecc71"
+      selector:
+        text:
+    sound:
+      name: Sound
+      description: Sound file to play when triggering.
+      required: false
+      default: "digital.wav"
+      example: "chime.wav"
+      selector:
+        select:
+          options:
+            - "digital.wav"
+            - "chime.wav"
+            - "soothing.wav"
+            - "buzzer.wav"
+            - "silent.wav"
+    days:
+      name: Days
+      description: List of days the alarm should repeat (0 = Monday, 6 = Sunday). Leave empty for one-off.
+      required: false
+      default: []
+      example: [0, 1, 2, 3, 4]
+      selector:
+        object:
+    snooze_duration:
+      name: Snooze Duration
+      description: Duration in minutes to postpone the alarm when snoozed.
+      required: false
+      default: 5
+      example: 9
+      selector:
+        number:
+          min: 1
+          max: 60
+          unit_of_measurement: minutes
+    media_player:
+      name: Output Speaker
+      description: Optional media player entity to play the alarm sound.
+      required: false
+      selector:
+        entity:
+          domain: media_player
+    area_id:
+      name: Area
+      description: Optional area to associate with the alarm.
+      required: false
+      selector:
+        area:
+
+delete:
+  name: Delete Alarm
+  description: Delete an existing alarm.
+  fields:
+    alarm_id:
+      name: Alarm ID
+      description: The unique ID (UUID) of the alarm to delete.
+      required: false
+      example: "a81d45bc-..."
+      selector:
+        text:
+    entity_id:
+      name: Entity ID
+      description: Any entity belonging to the alarm device to delete (e.g. switch.morning_wakeup_enabled).
+      required: false
+      selector:
+        entity:
+          domain: switch
+
+update:
+  name: Update Alarm
+  description: Update an existing alarm clock or reminder.
+  fields:
+    alarm_id:
+      name: Alarm ID
+      description: The unique ID (UUID) of the alarm to update.
+      required: false
+      example: "a81d45bc-..."
+      selector:
+        text:
+    entity_id:
+      name: Entity ID
+      description: Any entity belonging to the alarm.
+      required: false
+      selector:
+        entity:
+          domain: switch
+    name:
+      name: Name
+      description: The name or label for the alarm.
+      required: false
+      example: "Morning Wakeup"
+      selector:
+        text:
+    time:
+      name: Time
+      description: The time for the alarm to trigger (HH:MM or HH:MM:SS format).
+      required: false
+      example: "07:30:00"
+      selector:
+        text:
+    color:
+      name: Color
+      description: Hex color code representing the theme color of the alarm card.
+      required: false
+      example: "#2ecc71"
+      selector:
+        text:
+    sound:
+      name: Sound
+      description: Sound file to play when triggering.
+      required: false
+      selector:
+        select:
+          options:
+            - "digital.wav"
+            - "chime.wav"
+            - "soothing.wav"
+            - "buzzer.wav"
+            - "silent.wav"
+    days:
+      name: Days
+      description: List of days the alarm should repeat (0 = Monday, 6 = Sunday).
+      required: false
+      selector:
+        object:
+    snooze_duration:
+      name: Snooze Duration
+      description: Duration in minutes to postpone the alarm when snoozed.
+      required: false
+      selector:
+        number:
+          min: 1
+          max: 60
+          unit_of_measurement: minutes
+    media_player:
+      name: Output Speaker
+      description: Optional media player entity to play the alarm sound.
+      required: false
+      selector:
+        entity:
+          domain: media_player
+    area_id:
+      name: Area
+      description: Optional area to associate with the alarm.
+      required: false
+      selector:
+        area:
+
+stop:
+  name: Stop Alarm
+  description: Stop/dismiss a currently ringing or snoozed alarm.
+  fields:
+    alarm_id:
+      name: Alarm ID
+      description: The unique ID (UUID) of the alarm to stop.
+      required: false
+      selector:
+        text:
+    entity_id:
+      name: Entity ID
+      description: Any entity belonging to the alarm to stop (e.g. switch.morning_wakeup_enabled).
+      required: false
+      selector:
+        entity:
+          domain: switch
+
+dismiss:
+  name: Dismiss Alarm
+  description: Stop/dismiss a currently ringing or snoozed alarm (alias of stop).
+  fields:
+    alarm_id:
+      name: Alarm ID
+      description: The unique ID (UUID) of the alarm to dismiss.
+      required: false
+      selector:
+        text:
+    entity_id:
+      name: Entity ID
+      description: Any entity belonging to the alarm to dismiss.
+      required: false
+      selector:
+        entity:
+          domain: switch
+
+snooze:
+  name: Snooze Alarm
+  description: Snooze a currently ringing alarm.
+  fields:
+    alarm_id:
+      name: Alarm ID
+      description: The unique ID (UUID) of the alarm to snooze.
+      required: false
+      selector:
+        text:
+    entity_id:
+      name: Entity ID
+      description: Any entity belonging to the alarm to snooze.
+      required: false
+      selector:
+        entity:
+          domain: switch
+    duration:
+      name: Duration
+      description: Optional override snooze duration in minutes.
+      required: false
+      selector:
+        number:
+          min: 1
+          max: 60
+
+skip_next:
+  name: Skip Next
+  description: Skip the next upcoming trigger of a repeating alarm.
+  fields:
+    alarm_id:
+      name: Alarm ID
+      description: The unique ID (UUID) of the alarm.
+      required: false
+      selector:
+        text:
+    entity_id:
+      name: Entity ID
+      description: Any entity belonging to the alarm.
+      required: false
+      selector:
+        entity:
+          domain: switch
+
+unskip_next:
+  name: Unskip Next
+  description: Cancel a skip-next action on a repeating alarm.
+  fields:
+    alarm_id:
+      name: Alarm ID
+      description: The unique ID (UUID) of the alarm.
+      required: false
+      selector:
+        text:
+    entity_id:
+      name: Entity ID
+      description: Any entity belonging to the alarm.
+      required: false
+      selector:
+        entity:
+          domain: switch

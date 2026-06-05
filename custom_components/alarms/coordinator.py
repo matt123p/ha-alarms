@@ -29,6 +29,9 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+UNDEFINED = object()
+
+
 
 def calculate_next_trigger(
     time_val: datetime.time, days: list[int], now_local: datetime.datetime
@@ -74,6 +77,9 @@ class AlarmsCoordinator:
                     alarm["snoozed_until"] = dt_util.parse_datetime(alarm["snoozed_until"])
                 else:
                     alarm["snoozed_until"] = None
+
+                if "area_id" not in alarm:
+                    alarm["area_id"] = None
 
                 self.alarms[alarm_id] = alarm
 
@@ -139,6 +145,7 @@ class AlarmsCoordinator:
         days: list[int] | None = None,
         snooze_duration: int = 5,
         media_player: str | None = None,
+        area_id: str | None = None,
     ) -> str:
         """Create a new alarm."""
         alarm_id = str(uuid.uuid4())
@@ -161,6 +168,7 @@ class AlarmsCoordinator:
             "snoozed_until": None,
             "next_trigger": next_trigger,
             "media_player": media_player,
+            "area_id": area_id,
         }
 
         self.alarms[alarm_id] = alarm
@@ -190,6 +198,17 @@ class AlarmsCoordinator:
         # Dispatch delete signal to entities
         async_dispatcher_send(self.hass, f"alarms_delete_{alarm_id}")
         
+        # Remove device from registry (so it is not left behind as an orphaned device)
+        try:
+            if type(self.hass).__name__ not in ("MagicMock", "Mock"):
+                from homeassistant.helpers import device_registry as dr
+                dev_reg = dr.async_get(self.hass)
+                device = dev_reg.async_get_device(identifiers={(DOMAIN, alarm_id)})
+                if device:
+                    dev_reg.async_remove_device(device.id)
+        except Exception as err:
+            _LOGGER.error("Failed to remove device %s from registry: %s", alarm_id, err)
+
         del self.alarms[alarm_id]
         await self.async_save()
         
@@ -200,33 +219,36 @@ class AlarmsCoordinator:
     async def async_update_alarm(
         self,
         alarm_id: str,
-        name: str | None = None,
-        time_val: datetime.time | None = None,
-        color: str | None = None,
-        sound: str | None = None,
-        days: list[int] | None = None,
-        snooze_duration: int | None = None,
-        media_player: str | None = None,
+        name: str | None = UNDEFINED,
+        time_val: datetime.time | None = UNDEFINED,
+        color: str | None = UNDEFINED,
+        sound: str | None = UNDEFINED,
+        days: list[int] | None = UNDEFINED,
+        snooze_duration: int | None = UNDEFINED,
+        media_player: str | None = UNDEFINED,
+        area_id: str | None = UNDEFINED,
     ) -> None:
         """Update alarm attributes."""
         alarm = self.alarms.get(alarm_id)
         if not alarm:
             return
 
-        if name is not None:
+        if name is not UNDEFINED:
             alarm["name"] = name
-        if time_val is not None:
+        if time_val is not UNDEFINED:
             alarm["time"] = time_val
-        if color is not None:
+        if color is not UNDEFINED:
             alarm["color"] = color
-        if sound is not None:
+        if sound is not UNDEFINED:
             alarm["sound"] = sound
-        if days is not None:
+        if days is not UNDEFINED:
             alarm["days"] = days
-        if snooze_duration is not None:
+        if snooze_duration is not UNDEFINED:
             alarm["snooze_duration"] = snooze_duration
-        if media_player is not None:
+        if media_player is not UNDEFINED:
             alarm["media_player"] = media_player
+        if area_id is not UNDEFINED:
+            alarm["area_id"] = area_id
 
         # Recalculate next trigger if enabled
         if alarm["enabled"]:
@@ -313,6 +335,10 @@ class AlarmsCoordinator:
             EVENT_ALARM_DISMISSED,
             {"alarm_id": alarm_id, "name": alarm["name"]},
         )
+
+    async def async_stop_alarm(self, alarm_id: str) -> None:
+        """Stop/Dismiss a ringing or snoozed alarm."""
+        await self.async_dismiss_alarm(alarm_id)
 
     async def async_skip_next(self, alarm_id: str) -> None:
         """Silence/Skip the next occurrence of an alarm."""
@@ -406,6 +432,7 @@ class AlarmsCoordinator:
                 "sound": alarm["sound"],
                 "entity_id": f"switch.{alarm['name'].lower().replace(' ', '_')}_enabled",
                 "media_player": alarm.get("media_player"),
+                "area_id": alarm.get("area_id"),
             },
         )
 

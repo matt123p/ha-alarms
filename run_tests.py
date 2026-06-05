@@ -133,20 +133,42 @@ mock_util.dt = MockDt
 sys.modules["homeassistant.util"] = mock_util
 sys.modules["homeassistant.util.dt"] = MockDt
 
-sys.modules["homeassistant.helpers"] = MagicMock()
+mock_helpers = MagicMock()
+sys.modules["homeassistant.helpers"] = mock_helpers
 sys.modules["homeassistant.helpers.storage"] = MagicMock()
 sys.modules["homeassistant.helpers.event"] = MagicMock()
 sys.modules["homeassistant.helpers.dispatcher"] = MagicMock()
 sys.modules["homeassistant.helpers.entity_registry"] = MagicMock()
-sys.modules["homeassistant.helpers.intent"] = MagicMock()
+sys.modules["homeassistant.helpers.entity_platform"] = MagicMock()
+mock_area_registry = MagicMock()
+sys.modules["homeassistant.helpers.area_registry"] = mock_area_registry
+mock_helpers.area_registry = mock_area_registry
+
+class DummyIntentHandler:
+    """Dummy base class for intent handlers."""
+    pass
+
+mock_intent = MagicMock()
+mock_intent.IntentHandler = DummyIntentHandler
+sys.modules["homeassistant.helpers.intent"] = mock_intent
+mock_helpers.intent = mock_intent
 sys.modules["homeassistant.helpers.network"] = MagicMock()
 
 sys.modules["homeassistant.components"] = MagicMock()
 sys.modules["homeassistant.components.websocket_api"] = MagicMock()
 sys.modules["homeassistant.components.switch"] = MagicMock()
 sys.modules["homeassistant.components.time"] = MagicMock()
-sys.modules["homeassistant.components.sensor"] = MagicMock()
+
+class DummySensorEntity:
+    """Dummy base class for SensorEntity."""
+    pass
+
+mock_sensor = MagicMock()
+mock_sensor.SensorEntity = DummySensorEntity
+sys.modules["homeassistant.components.sensor"] = mock_sensor
+
 sys.modules["homeassistant.components.button"] = MagicMock()
+sys.modules["homeassistant.components.http"] = MagicMock()
 sys.modules["homeassistant.config_entries"] = MagicMock()
 
 # Ensure the root folder is in python path
@@ -169,6 +191,15 @@ from tests.test_coordinator import (
     test_skip_next_alarm,
     test_global_next_alarm,
     test_silent_alarm,
+    test_update_alarm,
+    test_next_alarm_by_area,
+)
+from tests.test_intents import (
+    test_parse_days,
+    test_create_intent_success,
+    test_create_intent_failures,
+    test_delete_intent,
+    test_update_intent,
 )
 
 
@@ -181,6 +212,14 @@ async def main() -> None:
     test_dst_spring_forward()
     test_dst_autumn_backward()
     print("[OK] Scheduler tests passed.")
+
+    print("\nRunning intent tests...")
+    test_parse_days()
+    await test_create_intent_success()
+    await test_create_intent_failures()
+    await test_delete_intent()
+    await test_update_intent()
+    print("[OK] Intent tests passed.")
 
     print("\nRunning coordinator tests...")
     
@@ -218,6 +257,16 @@ async def main() -> None:
     
     # Run coordinator test 5
     await test_silent_alarm(mock_hass, mock_store)
+    mock_hass.reset_mock()
+    mock_store.reset_mock()
+
+    # Run coordinator test 6
+    await test_update_alarm(mock_hass, mock_store)
+    mock_hass.reset_mock()
+    mock_store.reset_mock()
+
+    # Run coordinator test 7
+    await test_next_alarm_by_area(mock_hass, mock_store)
     print("[OK] Coordinator tests passed.")
     
     print("\n==============================")

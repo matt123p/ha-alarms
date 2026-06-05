@@ -83,6 +83,15 @@ class AlarmBaseSwitch(SwitchEntity):
         """Return if entity is available."""
         return self.alarm is not None
 
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Return custom attributes."""
+        if not self.alarm:
+            return None
+        return {
+            "alarm_id": self.alarm_id,
+        }
+
     async def async_added_to_hass(self) -> None:
         """Register dispatcher callbacks."""
         @callback

@@ -23,7 +23,7 @@ async def async_setup_entry(
         entities = []
         for alarm_id in alarm_ids:
             entities.append(AlarmSnoozeButton(coordinator, alarm_id))
-            entities.append(AlarmDismissButton(coordinator, alarm_id))
+            entities.append(AlarmStopButton(coordinator, alarm_id))
         async_add_entities(entities)
 
     # Chain the callback for dynamic entity creation
@@ -41,7 +41,7 @@ async def async_setup_entry(
     entities = []
     for alarm_id in coordinator.alarms:
         entities.append(AlarmSnoozeButton(coordinator, alarm_id))
-        entities.append(AlarmDismissButton(coordinator, alarm_id))
+        entities.append(AlarmStopButton(coordinator, alarm_id))
     async_add_entities(entities)
 
 
@@ -112,14 +112,14 @@ class AlarmSnoozeButton(AlarmBaseButton):
         await self.coordinator.async_snooze_alarm(self.alarm_id)
 
 
-class AlarmDismissButton(AlarmBaseButton):
-    """Button to dismiss/stop a ringing or snoozed alarm."""
+class AlarmStopButton(AlarmBaseButton):
+    """Button to stop a ringing or snoozed alarm."""
 
     def __init__(self, coordinator: AlarmsCoordinator, alarm_id: str) -> None:
-        """Initialize dismiss button."""
+        """Initialize stop button."""
         super().__init__(coordinator, alarm_id)
-        self._attr_name = "Dismiss"
-        self._attr_unique_id = f"{alarm_id}_dismiss"
+        self._attr_name = "Stop"
+        self._attr_unique_id = f"{alarm_id}_stop"
         self._attr_icon = "mdi:alarm-off"
 
     @property
@@ -128,5 +128,5 @@ class AlarmDismissButton(AlarmBaseButton):
         return self.alarm is not None and self.alarm["status"] in (STATE_RINGING, STATE_SNOOZED)
 
     async def async_press(self) -> None:
-        """Press the dismiss button."""
-        await self.coordinator.async_dismiss_alarm(self.alarm_id)
+        """Press the stop button."""
+        await self.coordinator.async_stop_alarm(self.alarm_id)
