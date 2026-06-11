@@ -360,3 +360,68 @@ async def test_next_alarm_by_area(mock_hass: MagicMock, mock_store: MagicMock) -
             assert sys_attrs["next_upcoming_alarm_area_name"] == "Bedroom"
             assert "bedroom" in sys_attrs["next_upcoming_alarm_by_area"]
 
+
+@pytest.mark.asyncio
+async def test_area_validation_and_correction(mock_hass: MagicMock, mock_store: MagicMock) -> None:
+    """Test validation and correction of alarm areas/locations."""
+    with patch("custom_components.alarms.coordinator.Store", return_value=mock_store):
+        coordinator = AlarmsCoordinator(mock_hass, "test_entry")
+        await coordinator.async_setup()
+
+        # Mock the area registry in hass
+        mock_area_reg = MagicMock()
+        mock_area_bedroom = MagicMock()
+        mock_area_bedroom.name = "Master Bedroom"
+        mock_area_bedroom.id = "bedroom"
+        mock_area_living = MagicMock()
+        mock_area_living.name = "Living Room"
+        mock_area_living.id = "living_room"
+        mock_area_reg.areas = {
+            "bedroom": mock_area_bedroom,
+            "living_room": mock_area_living,
+        }
+
+        with patch("homeassistant.helpers.area_registry.async_get", return_value=mock_area_reg):
+            # 1. Test correction of underscore in "master_bedroom" to "bedroom"
+            alarm_id = await coordinator.async_create_alarm(
+                name="Test Alarm 1",
+                time_val=datetime.time(8, 0, 0),
+                area_id="master_bedroom",
+            )
+            assert coordinator.alarms[alarm_id]["area_id"] == "bedroom"
+
+            # 2. Test exact match by name: "Living Room"
+            alarm_id_2 = await coordinator.async_create_alarm(
+                name="Test Alarm 2",
+                time_val=datetime.time(8, 0, 0),
+                area_id="Living Room",
+            )
+            assert coordinator.alarms[alarm_id_2]["area_id"] == "living_room"
+
+            # 3. Test exact match by ID: "living_room"
+            await coordinator.async_update_alarm(
+                alarm_id=alarm_id_2,
+                area_id="living_room"
+            )
+            assert coordinator.alarms[alarm_id_2]["area_id"] == "living_room"
+
+            # 4. Test "None", "clear", "no area", "" unsetting the area to None
+            for unset_val in ("None", "clear", "no area", "", None):
+                await coordinator.async_update_alarm(
+                    alarm_id=alarm_id,
+                    area_id=unset_val
+                )
+                assert coordinator.alarms[alarm_id]["area_id"] is None
+
+            # 5. Test invalid area raises ValueError
+            try:
+                await coordinator.async_create_alarm(
+                    name="Invalid Alarm",
+                    time_val=datetime.time(8, 0, 0),
+                    area_id="invalid_area"
+                )
+                assert False, "Expected ValueError was not raised"
+            except ValueError:
+                pass
+
+

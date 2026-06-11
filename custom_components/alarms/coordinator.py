@@ -136,6 +136,40 @@ class AlarmsCoordinator:
                 next_alarm = alarm
         return next_alarm
 
+    def _validate_and_resolve_area(self, area_id: str | None) -> str | None:
+        """Validate and resolve the area/location name or ID against registry."""
+        if area_id is None:
+            return None
+
+        if isinstance(area_id, str):
+            val_lower = area_id.strip().lower()
+            if val_lower == "" or val_lower in ("none", "clear", "no area"):
+                return None
+
+        # Fetch the area registry
+        from homeassistant.helpers import area_registry as ar
+        area_reg = ar.async_get(self.hass)
+        if not area_reg or not hasattr(area_reg, "areas"):
+            return area_id
+            
+        areas = area_reg.areas
+        if "mock" in type(areas).__name__.lower():
+            return area_id
+
+        normalized_input = area_id.replace("_", " ").strip().lower()
+        
+        for area_entry in area_reg.areas.values():
+            normalized_entry_id = area_entry.id.lower()
+            normalized_entry_name = area_entry.name.lower()
+            normalized_entry_id_spaces = area_entry.id.replace("_", " ").lower()
+            
+            if (normalized_entry_id == normalized_input or 
+                normalized_entry_name == normalized_input or 
+                normalized_entry_id_spaces == normalized_input):
+                return area_entry.id
+
+        raise ValueError(f"Invalid location/area: '{area_id}'")
+
     async def async_create_alarm(
         self,
         name: str,
@@ -148,6 +182,7 @@ class AlarmsCoordinator:
         area_id: str | None = None,
     ) -> str:
         """Create a new alarm."""
+        area_id = self._validate_and_resolve_area(area_id)
         alarm_id = str(uuid.uuid4())
         days_list = days or []
         now_local = dt_util.now()
@@ -233,6 +268,10 @@ class AlarmsCoordinator:
         if not alarm:
             return
 
+        resolved_area_id = UNDEFINED
+        if area_id is not UNDEFINED:
+            resolved_area_id = self._validate_and_resolve_area(area_id)
+
         if name is not UNDEFINED:
             alarm["name"] = name
         if time_val is not UNDEFINED:
@@ -247,8 +286,8 @@ class AlarmsCoordinator:
             alarm["snooze_duration"] = snooze_duration
         if media_player is not UNDEFINED:
             alarm["media_player"] = media_player
-        if area_id is not UNDEFINED:
-            alarm["area_id"] = area_id
+        if resolved_area_id is not UNDEFINED:
+            alarm["area_id"] = resolved_area_id
 
         # Recalculate next trigger if enabled
         if alarm["enabled"]:

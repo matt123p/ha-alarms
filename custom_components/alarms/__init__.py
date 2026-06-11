@@ -423,16 +423,20 @@ async def ws_create_alarm(hass: HomeAssistant, connection: websocket_api.ActiveC
         connection.send_error(msg["id"], "invalid_time", "Invalid time format")
         return
 
-    alarm_id = await coordinator.async_create_alarm(
-        name=msg["name"],
-        time_val=time_val,
-        color=msg["color"],
-        sound=msg["sound"],
-        days=msg["days"],
-        snooze_duration=msg["snooze_duration"],
-        media_player=msg.get("media_player"),
-        area_id=msg.get("area_id"),
-    )
+    try:
+        alarm_id = await coordinator.async_create_alarm(
+            name=msg["name"],
+            time_val=time_val,
+            color=msg["color"],
+            sound=msg["sound"],
+            days=msg["days"],
+            snooze_duration=msg["snooze_duration"],
+            media_player=msg.get("media_player"),
+            area_id=msg.get("area_id"),
+        )
+    except ValueError as err:
+        connection.send_error(msg["id"], "invalid_location", str(err))
+        return
     connection.send_result(msg["id"], {"alarm_id": alarm_id})
 
 
@@ -484,10 +488,14 @@ async def ws_update_alarm(hass: HomeAssistant, connection: websocket_api.ActiveC
     if "area_id" in msg:
         updates["area_id"] = msg["area_id"]
 
-    await coordinator.async_update_alarm(
-        alarm_id=msg["alarm_id"],
-        **updates
-    )
+    try:
+        await coordinator.async_update_alarm(
+            alarm_id=msg["alarm_id"],
+            **updates
+        )
+    except ValueError as err:
+        connection.send_error(msg["id"], "invalid_location", str(err))
+        return
     connection.send_result(msg["id"], {"success": True})
 
 
@@ -703,12 +711,17 @@ class AlarmsCreateIntentHandler(intent.IntentHandler):
             except Exception:
                 pass
 
-        await coordinator.async_create_alarm(
-            name=name,
-            time_val=time_val,
-            days=days,
-            area_id=area_id,
-        )
+        try:
+            await coordinator.async_create_alarm(
+                name=name,
+                time_val=time_val,
+                days=days,
+                area_id=area_id,
+            )
+        except ValueError as err:
+            response = intent_obj.create_response()
+            set_response_error(response, str(err))
+            return response
 
         days_str = "once"
         if days:
@@ -915,10 +928,15 @@ class AlarmsUpdateIntentHandler(intent.IntentHandler):
             set_response_error(response, "Please specify what you want to change (name, time, repeating days, or area).")
             return response
 
-        await coordinator.async_update_alarm(
-            alarm_id=target_alarm["id"],
-            **updated_fields
-        )
+        try:
+            await coordinator.async_update_alarm(
+                alarm_id=target_alarm["id"],
+                **updated_fields
+            )
+        except ValueError as err:
+            response = intent_obj.create_response()
+            set_response_error(response, str(err))
+            return response
 
         response = intent_obj.create_response()
         response.async_set_speech(

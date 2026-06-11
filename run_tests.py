@@ -193,6 +193,7 @@ from tests.test_coordinator import (
     test_silent_alarm,
     test_update_alarm,
     test_next_alarm_by_area,
+    test_area_validation_and_correction,
 )
 from tests.test_intents import (
     test_parse_days,
@@ -200,6 +201,7 @@ from tests.test_intents import (
     test_create_intent_failures,
     test_delete_intent,
     test_update_intent,
+    test_intent_invalid_area,
 )
 
 
@@ -219,6 +221,7 @@ async def main() -> None:
     await test_create_intent_failures()
     await test_delete_intent()
     await test_update_intent()
+    await test_intent_invalid_area()
     print("[OK] Intent tests passed.")
 
     print("\nRunning coordinator tests...")
@@ -267,6 +270,11 @@ async def main() -> None:
 
     # Run coordinator test 7
     await test_next_alarm_by_area(mock_hass, mock_store)
+    mock_hass.reset_mock()
+    mock_store.reset_mock()
+
+    # Run coordinator test 8
+    await test_area_validation_and_correction(mock_hass, mock_store)
     print("[OK] Coordinator tests passed.")
     
     print("\n==============================")

@@ -200,3 +200,45 @@ async def test_update_intent():
         response = await handler.async_handle(intent_obj)
         assert response.response_type == "error"
         assert "specify what you want to change" in response.speech_text
+
+
+@pytest.mark.asyncio
+async def test_intent_invalid_area():
+    mock_hass = MagicMock()
+    coordinator = MagicMock()
+    coordinator.async_create_alarm = AsyncMock(side_effect=ValueError("Invalid location/area: 'invalid_area'"))
+    coordinator.alarms = {
+        "id_1": {"id": "id_1", "name": "Morning", "time": datetime.time(7, 0)},
+    }
+    coordinator.async_update_alarm = AsyncMock(side_effect=ValueError("Invalid location/area: 'invalid_area'"))
+
+    with patch("custom_components.alarms.__init__.get_coordinator", return_value=coordinator):
+        # 1. Test create intent failure on invalid area
+        create_handler = AlarmsCreateIntentHandler()
+        slots = {
+            "time": {"value": "8:00 AM"},
+            "area": {"value": "invalid_area"},
+        }
+        intent_obj = MockIntent(mock_hass, slots)
+
+        mock_area_reg = MagicMock()
+        mock_area_reg.areas = {}
+        with patch("homeassistant.helpers.area_registry.async_get", return_value=mock_area_reg):
+            response = await create_handler.async_handle(intent_obj)
+
+        assert response.response_type == "error"
+        assert "Invalid location/area" in response.speech_text
+
+        # 2. Test update intent failure on invalid area
+        update_handler = AlarmsUpdateIntentHandler()
+        slots = {
+            "name": {"value": "Morning"},
+            "new_area": {"value": "invalid_area"},
+        }
+        intent_obj = MockIntent(mock_hass, slots)
+        with patch("homeassistant.helpers.area_registry.async_get", return_value=mock_area_reg):
+            response = await update_handler.async_handle(intent_obj)
+
+        assert response.response_type == "error"
+        assert "Invalid location/area" in response.speech_text
+
