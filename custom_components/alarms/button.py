@@ -60,7 +60,7 @@ class AlarmBaseButton(ButtonEntity):
             "name": self.alarm["name"] if self.alarm else "Alarm",
             "manufacturer": "Alarms Integration",
             "model": "Alarm Clock",
-            "sw_version": "1.0.0",
+            "sw_version": "1.0.1",
         }
 
     @property

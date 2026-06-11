@@ -65,7 +65,7 @@ class AlarmBaseSensor(SensorEntity):
             "name": self.alarm["name"] if self.alarm else "Alarm",
             "manufacturer": "Alarms Integration",
             "model": "Alarm Clock",
-            "sw_version": "1.0.0",
+            "sw_version": "1.0.1",
         }
 
     @property
@@ -170,7 +170,7 @@ class AlarmsSystemSensor(SensorEntity):
             "name": "Alarm Clock System",
             "manufacturer": "Alarms Integration",
             "model": "Alarm Clock System",
-            "sw_version": "1.0.0",
+            "sw_version": "1.0.1",
         }
 
     @property
@@ -309,7 +309,7 @@ class AlarmsListSensor(SensorEntity):
             "name": "Alarm Clock System",
             "manufacturer": "Alarms Integration",
             "model": "Alarm Clock System",
-            "sw_version": "1.0.0",
+            "sw_version": "1.0.1",
         }
 
     @property
@@ -422,7 +422,7 @@ class AlarmsNextAlarmSensor(SensorEntity):
             "name": "Alarm Clock System",
             "manufacturer": "Alarms Integration",
             "model": "Alarm Clock System",
-            "sw_version": "1.0.0",
+            "sw_version": "1.0.1",
         }
 
     @property

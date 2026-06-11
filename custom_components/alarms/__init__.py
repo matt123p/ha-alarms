@@ -159,7 +159,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if "frontend" in hass.config.components:
         from homeassistant.loader import async_get_integration
         integration = await async_get_integration(hass, DOMAIN)
-        version = integration.version or "1.0.0"
+        version = integration.version or "1.0.1"
 
         await panel_custom.async_register_panel(
             hass,
@@ -925,5 +925,4 @@ class AlarmsUpdateIntentHandler(intent.IntentHandler):
             f"I have updated the alarm '{target_alarm['name']}': " + " and ".join(speech_parts) + "."
         )
         return response
-
 
