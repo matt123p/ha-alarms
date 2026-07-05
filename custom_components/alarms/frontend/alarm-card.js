@@ -13,8 +13,6 @@ class AlarmsPanelCard extends HTMLElement {
     this._editingId = null;
     this._playingId = null;
     this._audio = null;
-    this._soundDropdownOpen = false;
-    this._mpDropdownOpen = false;
 
     // Default form state
     this._formState = {
@@ -27,7 +25,6 @@ class AlarmsPanelCard extends HTMLElement {
       media_player: "",
       area_id: "",
     };
-    this._areaDropdownOpen = false;
   }
 
   // Set HASS object (Home Assistant context)
@@ -90,6 +87,19 @@ class AlarmsPanelCard extends HTMLElement {
   // Standard Lovelace Card config
   setConfig(config) {
     this._config = config;
+    this.render();
+  }
+
+  // Home Assistant custom sidebar panels receive panel/narrow props instead
+  // of Lovelace card config. Keep them so the layout can adapt by context.
+  set panel(panel) {
+    this._panel = panel;
+    this.render();
+  }
+
+  set narrow(narrow) {
+    this._narrow = narrow;
+    this.render();
   }
 
   getCardSize() {
@@ -307,9 +317,6 @@ class AlarmsPanelCard extends HTMLElement {
       area_id: "",
     };
     this._showModal = true;
-    this._soundDropdownOpen = false;
-    this._mpDropdownOpen = false;
-    this._areaDropdownOpen = false;
     this.render();
   }
 
@@ -326,17 +333,11 @@ class AlarmsPanelCard extends HTMLElement {
       area_id: alarm.area_id || "",
     };
     this._showModal = true;
-    this._soundDropdownOpen = false;
-    this._mpDropdownOpen = false;
-    this._areaDropdownOpen = false;
     this.render();
   }
 
   _closeModal() {
     this._showModal = false;
-    this._soundDropdownOpen = false;
-    this._mpDropdownOpen = false;
-    this._areaDropdownOpen = false;
     this.render();
   }
 
@@ -358,18 +359,18 @@ class AlarmsPanelCard extends HTMLElement {
     if (this._previewAudio) {
       this._previewAudio.pause();
       this._previewAudio = null;
-      btn.textContent = "🔊 Preview";
+      btn.textContent = "Preview";
       return;
     }
 
     const soundUrl = `/alarms_static/sounds/${sound}`;
     this._previewAudio = new Audio(soundUrl);
     this._previewAudio.play().catch(e => console.warn(e));
-    btn.textContent = "⏹️ Stop";
+    btn.textContent = "Stop";
 
     this._previewAudio.onended = () => {
       this._previewAudio = null;
-      btn.textContent = "🔊 Preview";
+      btn.textContent = "Preview";
     };
   }
 
@@ -379,11 +380,11 @@ class AlarmsPanelCard extends HTMLElement {
 
     const name = shadow.getElementById("name").value.trim() || "Alarm";
     const time = shadow.getElementById("time").value;
-    const color = this._formState.color;
-    const sound = this._formState.sound;
+    const color = this._safeColor(this._formState.color, "#3498db");
+    const sound = shadow.getElementById("sound").value;
     const snooze_duration = parseInt(shadow.getElementById("snooze_duration").value, 10);
-    const media_player = this._formState.media_player || null;
-    const area_id = this._formState.area_id || null;
+    const media_player = shadow.getElementById("media_player").value || null;
+    const area_id = shadow.getElementById("area_id").value || null;
     const days = this._formState.days;
 
     if (this._previewAudio) {
@@ -427,12 +428,74 @@ class AlarmsPanelCard extends HTMLElement {
     }
   }
 
+  _escapeHtml(value) {
+    return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;",
+    })[char]);
+  }
+
+  _safeColor(value, fallback = "#e2b46c") {
+    return /^#[0-9a-fA-F]{6}$/.test(value || "") ? value : fallback;
+  }
+
+  _formatNextTrigger(value) {
+    if (!value) return "Not scheduled";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "Scheduled";
+    return date.toLocaleString([], {
+      weekday: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+      day: "numeric",
+      month: "short",
+    });
+  }
+
+  _formatSchedule(days) {
+    if (!days || days.length === 0) return "One-off";
+    const sorted = [...days].sort();
+    const sameDays = (values) => sorted.length === values.length && values.every((day, idx) => sorted[idx] === day);
+    if (sameDays([0, 1, 2, 3, 4, 5, 6])) return "Daily";
+    if (sameDays([0, 1, 2, 3, 4])) return "Weekdays";
+    if (sameDays([5, 6])) return "Weekends";
+    const names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    return sorted.map((idx) => names[idx]).join(", ");
+  }
+
   // Render HTML Templates
   render() {
     if (!this._hass) return;
 
-    const alarmsList = Object.values(this._alarms);
-    const daysShort = ["M", "T", "W", "T", "F", "S", "S"];
+    const statusOrder = {
+      ringing: 0,
+      snoozed: 1,
+      silenced: 2,
+      idle: 3,
+      disabled: 4,
+    };
+    const alarmsList = Object.values(this._alarms).sort((a, b) => {
+      const statusDiff = (statusOrder[a.status] ?? 3) - (statusOrder[b.status] ?? 3);
+      if (statusDiff !== 0) return statusDiff;
+      return String(a.time || "").localeCompare(String(b.time || ""));
+    });
+    const enabledCount = alarmsList.filter((alarm) => alarm.enabled).length;
+    const isPanelPage = Boolean(this._panel) || !this._config;
+    this.toggleAttribute("panel-page", isPanelPage);
+    const daysShort = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    const ringingCount = alarmsList.filter((alarm) => alarm.status === "ringing").length;
+    const snoozedCount = alarmsList.filter((alarm) => alarm.status === "snoozed").length;
+    const skippedCount = alarmsList.filter((alarm) => alarm.status === "silenced").length;
+    const upcomingAlarms = alarmsList
+      .map((alarm) => ({ alarm, triggerMs: Date.parse(alarm.next_trigger || "") }))
+      .filter((item) => item.alarm.enabled && Number.isFinite(item.triggerMs))
+      .sort((a, b) => a.triggerMs - b.triggerMs);
+    const nextAlarm = upcomingAlarms[0]?.alarm;
+    const nextAlarmName = nextAlarm ? this._escapeHtml(nextAlarm.name || "Alarm") : "No upcoming alarm";
+    const nextAlarmTime = nextAlarm ? this._formatNextTrigger(nextAlarm.next_trigger) : "Enable or create an alarm";
 
     const colors = [
       "#3498db", // Blue
@@ -452,15 +515,7 @@ class AlarmsPanelCard extends HTMLElement {
       { file: "silent.wav", name: "Silent / None (Integration Trigger)" },
     ];
 
-    const currentSound = sounds.find(s => s.file === this._formState.sound) || sounds[0];
-    const currentSoundName = currentSound ? currentSound.name : "Digital Beep";
-
-    const currentMp = this._mediaPlayers.find(mp => mp.entity_id === this._formState.media_player);
-    const currentMpName = currentMp ? currentMp.name : "Browser Only";
-
     const areas = Object.values(this._hass.areas || {});
-    const currentArea = areas.find(a => a.area_id === this._formState.area_id);
-    const currentAreaName = currentArea ? currentArea.name : "No Area";
 
     // Check audio prompt click
     const cardArea = this._config && this._config.area;
@@ -473,53 +528,83 @@ class AlarmsPanelCard extends HTMLElement {
     this.shadowRoot.innerHTML = `
       <style>
         :host {
-          display: flex;
-          flex-direction: column;
+          display: block;
           font-family: 'Outfit', 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-          color: #2d3748;
-          height: 100%;
+          color: var(--primary-text-color, #2d3748);
+          width: 100%;
+          max-width: 100%;
+          min-width: 0;
+          box-sizing: border-box;
+        }
+
+        :host([panel-page]) {
+          min-height: calc(100dvh - 64px);
+          padding: clamp(12px, 2vw, 24px);
+          background: var(--primary-background-color, #f5f7fa);
+        }
+
+        *, *::before, *::after {
           box-sizing: border-box;
         }
 
         .container {
-          background: rgba(255, 255, 255, 0.4);
-          backdrop-filter: blur(30px);
-          -webkit-backdrop-filter: blur(30px);
-          border: 1px solid rgba(255, 255, 255, 0.8);
-          border-radius: 32px;
-          padding: 40px;
-          box-shadow: 0 30px 60px rgba(0,0,0,0.1);
+          background: var(--card-background-color, #ffffff);
+          border: 1px solid var(--divider-color, rgba(0,0,0,0.08));
+          border-radius: var(--ha-card-border-radius, 12px);
+          padding: clamp(16px, 3vw, 28px);
+          box-shadow: var(--ha-card-box-shadow, 0 2px 8px rgba(0,0,0,0.08));
           position: relative;
-          overflow: hidden;
-          flex: 1;
+          overflow: visible;
           display: flex;
           flex-direction: column;
-          box-sizing: border-box;
+          gap: 18px;
+          min-width: 0;
+        }
+
+        .container.panel-page {
+          width: min(1240px, 100%);
+          min-height: calc(100dvh - 112px);
+          margin: 0 auto;
+          padding: 0;
+          background: transparent;
+          border: 0;
+          border-radius: 0;
+          box-shadow: none;
+          gap: 22px;
         }
 
         .header {
           display: flex;
           justify-content: space-between;
-          align-items: flex-start;
-          margin-bottom: 32px;
+          align-items: center;
           flex-wrap: wrap;
-          gap: 16px;
+          gap: 12px 18px;
+        }
+
+        .panel-page .header {
+          padding: 4px 0 0;
+          gap: 16px 24px;
         }
 
         .title-area h2 {
           margin: 0;
-          font-size: 36px;
+          font-size: clamp(24px, 4vw, 32px);
           font-weight: 700;
-          color: #1a202c;
-          letter-spacing: -0.5px;
+          color: var(--primary-text-color, #1a202c);
+          letter-spacing: 0;
+        }
+
+        .panel-page .title-area h2 {
+          font-size: clamp(32px, 5vw, 44px);
         }
 
         .clock-area {
           display: flex;
           align-items: center;
           gap: 8px;
-          margin-top: 8px;
-          color: #2d3748;
+          margin-top: 4px;
+          color: var(--secondary-text-color, #4a5568);
+          flex-wrap: wrap;
         }
 
         .clock-icon {
@@ -529,46 +614,113 @@ class AlarmsPanelCard extends HTMLElement {
         }
 
         .digital-clock {
-          font-size: 28px;
+          font-size: clamp(18px, 3vw, 24px);
           font-weight: 500;
-          letter-spacing: -0.5px;
-          color: #1a202c;
+          letter-spacing: 0;
+          color: var(--primary-text-color, #1a202c);
+        }
+
+        .summary-text {
+          font-size: 13px;
+          font-weight: 600;
+          color: var(--secondary-text-color, #718096);
+        }
+
+        .page-summary {
+          display: grid;
+          grid-template-columns: minmax(260px, 1.4fr) repeat(3, minmax(150px, 1fr));
+          gap: 12px;
+        }
+
+        .summary-card {
+          background: var(--card-background-color, #ffffff);
+          border: 1px solid var(--divider-color, rgba(0,0,0,0.08));
+          border-radius: 12px;
+          padding: 14px 16px;
+          box-shadow: var(--ha-card-box-shadow, 0 2px 8px rgba(0,0,0,0.06));
+          min-width: 0;
+        }
+
+        .summary-card.primary {
+          border-left: 5px solid var(--primary-color, #2b7a94);
+        }
+
+        .summary-label {
+          color: var(--secondary-text-color, #718096);
+          font-size: 12px;
+          font-weight: 800;
+          text-transform: uppercase;
+          letter-spacing: 0;
+          margin-bottom: 6px;
+        }
+
+        .summary-value {
+          color: var(--primary-text-color, #1a202c);
+          font-size: 22px;
+          font-weight: 750;
+          line-height: 1.15;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .summary-subvalue {
+          color: var(--secondary-text-color, #718096);
+          font-size: 13px;
+          font-weight: 600;
+          margin-top: 4px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
 
         .btn-add {
-          background: linear-gradient(135deg, #2b7a94 0%, #1c566a 100%);
+          background: var(--primary-color, #2b7a94);
           color: white;
           border: none;
-          padding: 12px 24px;
-          border-radius: 20px;
+          padding: 10px 16px;
+          border-radius: 10px;
           font-weight: 600;
           font-size: 15px;
           cursor: pointer;
-          transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-          box-shadow: 0 8px 20px rgba(43, 122, 148, 0.3);
+          transition: filter 0.2s, transform 0.2s;
           display: flex;
           align-items: center;
-          gap: 6px;
+          gap: 8px;
+          min-height: 40px;
         }
 
         .btn-add:hover {
-          transform: translateY(-2px);
-          box-shadow: 0 12px 25px rgba(43, 122, 148, 0.45);
+          filter: brightness(1.08);
+          transform: translateY(-1px);
         }
 
         /* Alarms List */
         .alarms-list {
           display: flex;
           flex-direction: column;
-          gap: 16px;
+          gap: 10px;
+          min-width: 0;
+        }
+
+        .panel-page .alarms-list {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(min(100%, 390px), 1fr));
+          gap: 14px;
+          align-items: start;
         }
 
         .empty-state {
           text-align: center;
-          padding: 60px 20px;
-          background: rgba(255, 255, 255, 0.5);
-          border-radius: 24px;
-          border: 1px dashed rgba(0,0,0,0.1);
+          padding: 44px 20px;
+          background: var(--secondary-background-color, #f7fafc);
+          border-radius: 12px;
+          border: 1px dashed var(--divider-color, rgba(0,0,0,0.12));
+        }
+
+        .panel-page .empty-state {
+          background: var(--card-background-color, #ffffff);
+          box-shadow: var(--ha-card-box-shadow, 0 2px 8px rgba(0,0,0,0.06));
         }
 
         .empty-state p {
@@ -580,22 +732,67 @@ class AlarmsPanelCard extends HTMLElement {
 
         /* Alarm Row */
         .alarm-row {
-          background: rgba(255, 255, 255, 0.75);
-          border: 1px solid rgba(255, 255, 255, 0.5);
-          border-radius: 24px;
-          padding: 20px 32px;
-          box-shadow: 0 8px 24px rgba(0,0,0,0.03);
-          transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-          display: flex;
+          background: var(--secondary-background-color, #f8fafc);
+          border: 1px solid var(--divider-color, rgba(0,0,0,0.08));
+          border-left: 5px solid var(--alarm-color);
+          border-radius: 12px;
+          padding: 14px 16px;
+          transition: background 0.2s, box-shadow 0.2s;
+          display: grid;
+          grid-template-columns: minmax(92px, 0.7fr) minmax(140px, 1.2fr) minmax(210px, 1fr) auto auto;
           align-items: center;
-          gap: 32px;
+          gap: 12px 16px;
           position: relative;
+          min-width: 0;
+        }
+
+        .panel-page .alarm-row {
+          grid-template-columns: minmax(96px, auto) minmax(0, 1fr) auto;
+          grid-template-areas:
+            "time details menu"
+            "time details actions"
+            "days days days";
+          align-items: start;
+          min-height: 164px;
+          padding: 18px;
+          background: var(--card-background-color, #ffffff);
+          box-shadow: var(--ha-card-box-shadow, 0 2px 8px rgba(0,0,0,0.08));
+        }
+
+        .panel-page .time-display {
+          grid-area: time;
+        }
+
+        .panel-page .alarm-details {
+          grid-area: details;
+        }
+
+        .panel-page .days-row {
+          grid-area: days;
+          grid-column: 1 / -1;
+          width: min(100%, 356px);
+          grid-template-columns: repeat(7, 44px);
+          justify-content: start;
+        }
+
+        .panel-page .day-dot {
+          height: 32px;
+        }
+
+        .panel-page .switch-container {
+          grid-area: actions;
+          justify-self: end;
+          align-items: flex-end;
+        }
+
+        .panel-page .options-container {
+          grid-area: menu;
+          justify-self: end;
         }
 
         .alarm-row:hover {
-          transform: translateY(-2px);
-          background: rgba(255, 255, 255, 0.85);
-          box-shadow: 0 12px 30px rgba(0,0,0,0.06);
+          background: var(--card-background-color, #ffffff);
+          box-shadow: 0 4px 14px rgba(0,0,0,0.06);
         }
 
         .alarm-row.status-disabled {
@@ -613,25 +810,25 @@ class AlarmsPanelCard extends HTMLElement {
         }
 
         .time-display {
-          font-size: 48px;
+          font-size: clamp(34px, 5vw, 46px);
           font-weight: 700;
-          color: #1a202c;
-          letter-spacing: -1px;
-          min-width: 140px;
+          color: var(--primary-text-color, #1a202c);
+          letter-spacing: 0;
+          line-height: 1;
+          min-width: 0;
         }
 
         .alarm-details {
-          flex: 1;
           display: flex;
           flex-direction: column;
           gap: 4px;
-          min-width: 180px;
+          min-width: 0;
         }
 
         .alarm-name {
           font-size: 20px;
           font-weight: 600;
-          color: #1a202c;
+          color: var(--primary-text-color, #1a202c);
           white-space: nowrap;
           overflow: hidden;
           text-overflow: ellipsis;
@@ -643,9 +840,44 @@ class AlarmsPanelCard extends HTMLElement {
           gap: 6px;
           font-size: 12px;
           font-weight: 700;
-          color: #718096;
+          color: var(--secondary-text-color, #718096);
           text-transform: uppercase;
-          letter-spacing: 0.5px;
+          letter-spacing: 0;
+          min-width: 0;
+        }
+
+        .status-area span:last-child {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .alarm-meta-row {
+          display: flex;
+          gap: 8px;
+          flex-wrap: wrap;
+          margin-top: 8px;
+          min-width: 0;
+        }
+
+        .meta-chip {
+          background: var(--secondary-background-color, #f7fafc);
+          border: 1px solid var(--divider-color, #e2e8f0);
+          border-radius: 8px;
+          color: var(--secondary-text-color, #4a5568);
+          font-size: 12px;
+          font-weight: 650;
+          line-height: 1.2;
+          min-width: 0;
+          max-width: 100%;
+          padding: 6px 8px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .meta-chip.next {
+          color: var(--primary-text-color, #1a202c);
         }
 
         .status-dot {
@@ -671,7 +903,7 @@ class AlarmsPanelCard extends HTMLElement {
           flex-direction: column;
           align-items: center;
           gap: 6px;
-          min-width: 120px;
+          min-width: 84px;
         }
 
         .switch {
@@ -749,7 +981,7 @@ class AlarmsPanelCard extends HTMLElement {
         .skip-next-text {
           font-size: 11px;
           font-weight: 700;
-          color: #488a99;
+          color: var(--primary-color, #488a99);
           cursor: pointer;
           text-decoration: underline;
           transition: color 0.2s;
@@ -761,41 +993,62 @@ class AlarmsPanelCard extends HTMLElement {
 
         /* Badges */
         .days-row {
-          display: flex;
-          gap: 8px;
-          margin-right: 16px;
+          display: grid;
+          grid-template-columns: repeat(7, minmax(36px, 1fr));
+          gap: 6px;
+          width: min(100%, 336px);
+          min-width: 0;
         }
 
         .day-dot {
-          width: 32px;
-          height: 32px;
-          border-radius: 8px;
+          width: 100%;
+          min-width: 0;
+          height: 30px;
+          border-radius: 999px;
           display: flex;
           align-items: center;
           justify-content: center;
-          font-size: 12px;
+          font-size: 11px;
           font-weight: 700;
-          background: #e2e8f0;
-          color: #718096;
-          border: 1px solid rgba(0,0,0,0.03);
-          transition: all 0.2s;
+          background: var(--secondary-background-color, #f7fafc);
+          color: var(--secondary-text-color, #718096);
+          border: 1px solid var(--divider-color, rgba(0,0,0,0.08));
         }
 
         .day-dot.active {
-          background: #e2b46c;
           color: white;
-          box-shadow: 0 4px 10px rgba(226, 180, 108, 0.25);
+          border-color: transparent;
+          box-shadow: none;
+        }
+
+        .one-off-badge {
+          grid-column: 1 / -1;
+          justify-self: start;
+          font-size: 13px;
+          font-weight: 600;
+          color: var(--secondary-text-color, #718096);
+          background: var(--divider-color, #e2e8f0);
+          padding: 6px 10px;
+          border-radius: 8px;
+          white-space: nowrap;
         }
 
         /* Action buttons */
         .btn-action {
-          padding: 8px 16px;
+          padding: 8px 12px;
           font-size: 13px;
           font-weight: 700;
           border-radius: 10px;
           border: none;
           cursor: pointer;
           transition: all 0.2s;
+        }
+
+        .active-actions {
+          display: flex;
+          gap: 8px;
+          flex-wrap: wrap;
+          justify-content: center;
         }
 
         .btn-snooze { background: #e67e22; color: white; }
@@ -814,7 +1067,7 @@ class AlarmsPanelCard extends HTMLElement {
         .btn-options {
           background: transparent;
           border: none;
-          color: #718096;
+          color: var(--secondary-text-color, #718096);
           cursor: pointer;
           font-size: 20px;
           font-weight: 700;
@@ -899,6 +1152,7 @@ class AlarmsPanelCard extends HTMLElement {
           display: flex;
           align-items: center;
           justify-content: center;
+          padding: 16px;
           z-index: 1000;
           opacity: 0;
           pointer-events: none;
@@ -911,19 +1165,17 @@ class AlarmsPanelCard extends HTMLElement {
         }
 
         .modal-content {
-          background: rgba(255, 255, 255, 0.95);
-          border: 1px solid rgba(255, 255, 255, 0.8);
-          border-radius: 28px;
-          width: 90%;
-          max-width: 460px;
-          max-height: 90vh;
+          background: var(--card-background-color, #ffffff);
+          border: 1px solid var(--divider-color, rgba(0,0,0,0.08));
+          border-radius: var(--ha-card-border-radius, 12px);
+          width: min(720px, 100%);
+          max-height: calc(100dvh - 32px);
           overflow-y: auto;
-          box-sizing: border-box;
-          padding: 32px;
+          padding: clamp(18px, 3vw, 28px);
           box-shadow: 0 25px 60px rgba(0,0,0,0.15);
           transform: translateY(20px);
           transition: transform 0.3s;
-          color: #2d3748;
+          color: var(--primary-text-color, #2d3748);
         }
 
         .modal-overlay.open .modal-content {
@@ -934,14 +1186,15 @@ class AlarmsPanelCard extends HTMLElement {
           display: flex;
           justify-content: space-between;
           align-items: center;
-          margin-bottom: 24px;
+          gap: 16px;
+          margin-bottom: 20px;
         }
 
         .modal-header h3 {
           margin: 0;
           font-size: 24px;
           font-weight: 700;
-          color: #1a202c;
+          color: var(--primary-text-color, #1a202c);
         }
 
         .close-modal-btn {
@@ -952,8 +1205,20 @@ class AlarmsPanelCard extends HTMLElement {
           cursor: pointer;
         }
 
+        #alarm-form {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 16px;
+        }
+
         .form-group {
-          margin-bottom: 20px;
+          margin-bottom: 0;
+          min-width: 0;
+        }
+
+        .form-group.full-width,
+        .modal-footer {
+          grid-column: 1 / -1;
         }
 
         .form-group label {
@@ -967,14 +1232,14 @@ class AlarmsPanelCard extends HTMLElement {
         .input-text, .select-input {
           width: 100%;
           padding: 12px 16px;
-          background: #f7fafc;
-          border: 1px solid #e2e8f0;
-          border-radius: 12px;
-          color: #2d3748;
+          background: var(--secondary-background-color, #f7fafc);
+          border: 1px solid var(--divider-color, #e2e8f0);
+          border-radius: 10px;
+          color: var(--primary-text-color, #2d3748);
           font-size: 15px;
-          box-sizing: border-box;
           outline: none;
           transition: all 0.2s;
+          min-height: 44px;
         }
 
         .input-text:focus, .select-input:focus {
@@ -991,108 +1256,43 @@ class AlarmsPanelCard extends HTMLElement {
         .sound-row {
           display: flex;
           gap: 10px;
-          align-items: stretch;
+          align-items: center;
           width: 100%;
+          min-width: 0;
+        }
+
+        .sound-row .select-input {
+          min-width: 0;
         }
 
         .preview-btn {
-          background: #f7fafc;
-          color: #2d3748;
-          border: 1px solid #e2e8f0;
-          border-radius: 12px;
-          padding: 0 15px;
+          background: var(--secondary-background-color, #f7fafc);
+          color: var(--primary-text-color, #2d3748);
+          border: 1px solid var(--divider-color, #e2e8f0);
+          border-radius: 10px;
+          padding: 0 14px;
           cursor: pointer;
           font-size: 14px;
           font-weight: 600;
           transition: 0.2s;
           white-space: nowrap;
+          min-height: 44px;
         }
 
         .preview-btn:hover {
           background: #edf2f7;
         }
 
-        /* Custom Dropdown Styling */
-        .custom-dropdown-container {
-          position: relative;
-          width: 100%;
-        }
-
-        .custom-dropdown-trigger {
-          width: 100%;
-          padding: 12px 16px;
-          background: #f7fafc;
-          border: 1px solid #e2e8f0;
-          border-radius: 12px;
-          color: #2d3748;
-          font-size: 15px;
-          font-weight: 600;
-          text-align: left;
-          cursor: pointer;
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          outline: none;
-          transition: all 0.2s;
-          box-sizing: border-box;
-        }
-
-        .custom-dropdown-trigger:focus {
-          border-color: #488a99;
-          background: white;
-          box-shadow: 0 0 0 3px rgba(72, 138, 153, 0.15);
-        }
-
-        .custom-dropdown-options {
-          position: absolute;
-          top: calc(100% + 4px);
-          left: 0;
-          right: 0;
-          background: white;
-          border: 1px solid rgba(0,0,0,0.08);
-          border-radius: 12px;
-          box-shadow: 0 10px 25px rgba(0,0,0,0.1);
-          z-index: 1000;
-          display: none;
-          flex-direction: column;
-          max-height: 200px;
-          overflow-y: auto;
-          padding: 6px 0;
-        }
-
-        .custom-dropdown-options.open {
-          display: flex;
-        }
-
-        .custom-dropdown-option {
-          padding: 10px 16px;
-          font-size: 14px;
-          font-weight: 600;
-          color: #4a5568;
-          cursor: pointer;
-          transition: background 0.15s;
-        }
-
-        .custom-dropdown-option:hover {
-          background: #f7fafc;
-          color: #1a202c;
-        }
-
-        .custom-dropdown-option.selected {
-          background: #edf2f7;
-          color: #488a99;
-          font-weight: 700;
-        }
-
         /* Custom Day Selector in Form */
         .day-select-row {
-          display: flex;
-          justify-content: space-between;
+          display: grid;
+          grid-template-columns: repeat(7, minmax(32px, 1fr));
+          gap: 8px;
           margin-top: 4px;
         }
 
         .day-select-btn {
-          width: 40px;
+          width: 100%;
           height: 40px;
           border-radius: 10px;
           border: 1px solid #e2e8f0;
@@ -1122,6 +1322,7 @@ class AlarmsPanelCard extends HTMLElement {
         .color-swatches {
           display: flex;
           gap: 10px;
+          flex-wrap: wrap;
           margin-top: 4px;
         }
 
@@ -1147,7 +1348,8 @@ class AlarmsPanelCard extends HTMLElement {
           display: flex;
           justify-content: flex-end;
           gap: 12px;
-          margin-top: 28px;
+          margin-top: 8px;
+          flex-wrap: wrap;
         }
 
         .btn-cancel {
@@ -1186,34 +1388,138 @@ class AlarmsPanelCard extends HTMLElement {
         .audio-prompt {
           background: rgba(254, 215, 215, 0.9);
           border: 1px solid rgba(254, 178, 178, 0.8);
-          border-radius: 20px;
-          padding: 16px 24px;
-          margin-bottom: 24px;
+          border-radius: 12px;
+          padding: 14px 16px;
           display: flex;
           justify-content: space-between;
           align-items: center;
+          gap: 12px;
+          flex-wrap: wrap;
           color: #9b2c2c;
           box-shadow: 0 10px 20px rgba(155, 44, 44, 0.05);
           animation: banner-glow 1.5s infinite alternate;
+        }
+
+        .audio-prompt-title {
+          font-weight: 700;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          min-width: 0;
+        }
+
+        .audio-prompt-actions {
+          display: flex;
+          gap: 8px;
+          align-items: center;
+          flex-wrap: wrap;
         }
 
         @keyframes banner-glow {
           0% { box-shadow: 0 0 5px rgba(229, 62, 62, 0.1); }
           100% { box-shadow: 0 0 20px rgba(229, 62, 62, 0.3); }
         }
+
+        @media (max-width: 900px) {
+          .page-summary {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .alarm-row {
+            grid-template-columns: minmax(92px, auto) minmax(0, 1fr) auto;
+          }
+
+          .card-page .days-row {
+            grid-column: 1 / -1;
+            width: 100%;
+          }
+        }
+
+        @media (max-width: 620px) {
+          .container {
+            padding: 14px;
+            gap: 14px;
+          }
+
+          .header {
+            align-items: stretch;
+          }
+
+          .btn-add {
+            width: 100%;
+            justify-content: center;
+          }
+
+          .page-summary {
+            grid-template-columns: 1fr;
+          }
+
+          .summary-value,
+          .summary-subvalue {
+            white-space: normal;
+          }
+
+          .alarm-row {
+            grid-template-columns: minmax(0, 1fr) auto;
+            grid-template-areas:
+              "time menu"
+              "details details"
+              "days days"
+              "actions actions";
+          }
+
+          .time-display { grid-area: time; }
+          .alarm-details { grid-area: details; }
+          .days-row { grid-area: days; }
+          .switch-container {
+            grid-area: actions;
+            justify-self: stretch;
+            align-items: flex-start;
+          }
+          .options-container {
+            grid-area: menu;
+            justify-self: end;
+          }
+
+          .alarm-name {
+            white-space: normal;
+          }
+
+          #alarm-form {
+            grid-template-columns: 1fr;
+          }
+
+          .form-group.full-width,
+          .modal-footer {
+            grid-column: auto;
+          }
+
+          .sound-row {
+            flex-direction: column;
+            align-items: stretch;
+          }
+
+          .modal-footer {
+            justify-content: stretch;
+          }
+
+          .modal-footer button {
+            flex: 1 1 140px;
+          }
+        }
       </style>
 
-      <div class="container">
+      <div class="container ${isPanelPage ? "panel-page" : "card-page"}">
         <!-- Ringing Alarm Banner -->
         ${ringingAlarm
         ? `
           <div class="audio-prompt">
-            <span style="font-weight: 700; display: flex; align-items: center; gap: 8px;">
-              🚨 Alarm "${ringingAlarm.name || 'Alarm'}" is ringing!
+            <span class="audio-prompt-title">
+              Alarm "${this._escapeHtml(ringingAlarm.name || 'Alarm')}" is ringing
             </span>
-            <div style="display: flex; gap: 12px; align-items: center;">
-              <button class="btn-action btn-snooze" data-id="${ringingAlarm.id}">Snooze</button>
-              <button class="btn-action btn-stop" data-id="${ringingAlarm.id}">Stop</button>
+            <div class="audio-prompt-actions">
+              <button class="btn-action btn-snooze" data-id="${this._escapeHtml(ringingAlarm.id)}">Snooze</button>
+              <button class="btn-action btn-stop" data-id="${this._escapeHtml(ringingAlarm.id)}">Stop</button>
             </div>
           </div>
         `
@@ -1222,14 +1528,43 @@ class AlarmsPanelCard extends HTMLElement {
 
         <div class="header">
           <div class="title-area">
-            <h2>Alarm System</h2>
+            <h2>Alarms</h2>
             <div class="clock-area">
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="clock-icon"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
               <div class="digital-clock">00:00:00</div>
+              <div class="summary-text">${alarmsList.length} ${alarmsList.length === 1 ? "alarm" : "alarms"} | ${enabledCount} enabled</div>
             </div>
           </div>
           <button class="btn-add">+ Add Alarm</button>
         </div>
+
+        ${isPanelPage
+        ? `
+          <div class="page-summary">
+            <div class="summary-card primary">
+              <div class="summary-label">Next</div>
+              <div class="summary-value">${nextAlarmName}</div>
+              <div class="summary-subvalue">${this._escapeHtml(nextAlarmTime)}</div>
+            </div>
+            <div class="summary-card">
+              <div class="summary-label">Enabled</div>
+              <div class="summary-value">${enabledCount}/${alarmsList.length}</div>
+              <div class="summary-subvalue">Ready to ring</div>
+            </div>
+            <div class="summary-card">
+              <div class="summary-label">Active</div>
+              <div class="summary-value">${ringingCount + snoozedCount}</div>
+              <div class="summary-subvalue">${ringingCount} ringing, ${snoozedCount} snoozed</div>
+            </div>
+            <div class="summary-card">
+              <div class="summary-label">Skipped</div>
+              <div class="summary-value">${skippedCount}</div>
+              <div class="summary-subvalue">Next occurrence</div>
+            </div>
+          </div>
+        `
+        : ""
+      }
 
         ${alarmsList.length === 0
         ? `
@@ -1241,22 +1576,32 @@ class AlarmsPanelCard extends HTMLElement {
           <div class="alarms-list">
             ${alarmsList
           .map((alarm) => {
-            const isRinging = alarm.status === "ringing";
-            const isSnoozed = alarm.status === "snoozed";
-            const isSilenced = alarm.status === "silenced";
+            const alarmStatus = String(alarm.status || "idle").replace(/[^a-z0-9_-]/gi, "") || "idle";
+            const isRinging = alarmStatus === "ringing";
+            const isSnoozed = alarmStatus === "snoozed";
+            const isSilenced = alarmStatus === "silenced";
 
-            let statusText = alarm.status;
-            if (alarm.status === "silenced") statusText = "Skipped Next";
+            let statusText = alarmStatus;
+            if (alarmStatus === "silenced") statusText = "Skipped Next";
+            const alarmColor = this._safeColor(alarm.color);
+            const alarmArea = alarm.area_id ? (areas.find(a => a.area_id === alarm.area_id)?.name || alarm.area_id) : "";
+            const alarmId = this._escapeHtml(alarm.id);
+            const scheduleText = this._formatSchedule(alarm.days);
+            const nextText = alarm.enabled ? this._formatNextTrigger(alarm.next_trigger) : "Disabled";
 
             return `
-              <div class="alarm-row status-${alarm.status}" style="--alarm-color: ${alarm.color || '#e2b46c'}">
-                <div class="time-display">${alarm.time.substring(0, 5)}</div>
+              <div class="alarm-row status-${alarmStatus}" style="--alarm-color: ${alarmColor}">
+                <div class="time-display">${this._escapeHtml(String(alarm.time || "").substring(0, 5))}</div>
                 
                 <div class="alarm-details">
-                  <div class="alarm-name">${alarm.name || 'Alarm'}</div>
+                  <div class="alarm-name">${this._escapeHtml(alarm.name || 'Alarm')}</div>
                   <div class="status-area">
-                    <span class="status-dot ${alarm.status}"></span>
-                    <span>Status: ${statusText}${alarm.area_id ? ` • ${areas.find(a => a.area_id === alarm.area_id)?.name || alarm.area_id}` : ""}</span>
+                    <span class="status-dot ${alarmStatus}"></span>
+                    <span>${this._escapeHtml(statusText)}${alarmArea ? ` | ${this._escapeHtml(alarmArea)}` : ""}</span>
+                  </div>
+                  <div class="alarm-meta-row">
+                    <span class="meta-chip">${this._escapeHtml(scheduleText)}</span>
+                    <span class="meta-chip next">${this._escapeHtml(nextText)}</span>
                   </div>
                 </div>
 
@@ -1266,29 +1611,29 @@ class AlarmsPanelCard extends HTMLElement {
                     ${daysShort
                   .map((day, idx) => {
                     const active = alarm.days.includes(idx);
-                    return `<div class="day-dot ${active ? "active" : ""}" style="${active ? `background: ${alarm.color || '#e2b46c'}; box-shadow: 0 4px 10px ${alarm.color}40;` : ""}">${day}</div>`;
+                    return `<div class="day-dot ${active ? "active" : ""}" style="${active ? `background: ${alarmColor};` : ""}">${day}</div>`;
                   })
                   .join("")}
                   </div>
                 `
-                : `<div class="days-row"><div style="font-size: 13px; font-weight: 600; color: #718096; background: #e2e8f0; padding: 6px 12px; border-radius: 8px;">One-off Alarm</div></div>`
+                : `<div class="days-row"><div class="one-off-badge">One-off Alarm</div></div>`
               }
 
                 <div class="switch-container">
                   ${isRinging || isSnoozed
                   ? `
-                    <div style="display: flex; gap: 8px;">
-                      ${isRinging ? `<button class="btn-action btn-snooze" data-id="${alarm.id}" style="padding: 6px 12px; font-size: 12px; border-radius: 8px;">Snooze</button>` : ""}
-                      <button class="btn-action btn-stop" data-id="${alarm.id}" style="padding: 6px 12px; font-size: 12px; border-radius: 8px;">Stop</button>
+                    <div class="active-actions">
+                      ${isRinging ? `<button class="btn-action btn-snooze" data-id="${alarmId}">Snooze</button>` : ""}
+                      <button class="btn-action btn-stop" data-id="${alarmId}">Stop</button>
                     </div>
                   `
                   : `
                     <label class="switch">
-                      <input type="checkbox" class="toggle-enabled" data-id="${alarm.id}" ${alarm.enabled ? "checked" : ""}>
+                      <input type="checkbox" class="toggle-enabled" data-id="${alarmId}" ${alarm.enabled ? "checked" : ""}>
                       <span class="slider"></span>
                     </label>
                     ${alarm.enabled && alarm.days && alarm.days.length > 0
-                    ? `<span class="skip-next-text btn-skip ${isSilenced ? 'silenced' : ''}" data-id="${alarm.id}">${isSilenced ? 'Unskip' : 'Skip Next'}</span>`
+                    ? `<span class="skip-next-text btn-skip ${isSilenced ? 'silenced' : ''}" data-id="${alarmId}">${isSilenced ? 'Unskip' : 'Skip Next'}</span>`
                     : ""
                     }
                   `
@@ -1296,10 +1641,10 @@ class AlarmsPanelCard extends HTMLElement {
                 </div>
 
                 <div class="options-container">
-                  <button class="btn-options" title="Options">•••</button>
+                  <button class="btn-options" title="Options">...</button>
                   <div class="dropdown-menu">
-                    <button class="dropdown-item icon-btn-edit" data-id="${alarm.id}">Edit</button>
-                    <button class="dropdown-item dropdown-item-delete icon-btn-delete" data-id="${alarm.id}">Delete</button>
+                    <button class="dropdown-item icon-btn-edit" data-id="${alarmId}">Edit</button>
+                    <button class="dropdown-item dropdown-item-delete icon-btn-delete" data-id="${alarmId}">Delete</button>
                   </div>
                 </div>
               </div>
@@ -1313,26 +1658,32 @@ class AlarmsPanelCard extends HTMLElement {
 
       <!-- Add/Edit Modal -->
       <div class="modal-overlay ${this._showModal ? "open" : ""}">
-          <div class="modal-content" style="--form-color: ${this._formState.color}">
+          <div class="modal-content" style="--form-color: ${this._safeColor(this._formState.color, "#3498db")}">
             <div class="modal-header">
               <h3>${this._editingId ? "Edit Alarm" : "Add Alarm"}</h3>
-              <button class="close-modal-btn">&times;</button>
+              <button class="close-modal-btn" aria-label="Close">&times;</button>
             </div>
             
             <form id="alarm-form">
-              <div class="form-group">
+              <div class="form-group full-width">
                 <label for="name">Alarm Name / Label</label>
-                <input type="text" id="name" class="input-text" placeholder="Alarm name..." value="${this._formState.name
+                <input type="text" id="name" class="input-text" placeholder="Alarm name..." value="${this._escapeHtml(this._formState.name)
       }">
               </div>
 
               <div class="form-group">
                 <label for="time">Time</label>
-                <input type="time" id="time" class="input-text" style="font-size: 18px; font-weight: 700; width: 140px;" value="${this._formState.time
+                <input type="time" id="time" class="input-text" required value="${this._escapeHtml(this._formState.time)
       }">
               </div>
 
               <div class="form-group">
+                <label for="snooze_duration">Snooze Duration (minutes)</label>
+                <input type="number" id="snooze_duration" class="input-text" min="1" max="60" required value="${this._escapeHtml(this._formState.snooze_duration)
+      }">
+              </div>
+
+              <div class="form-group full-width">
                 <label>Repeat Days (Leave empty for one-off)</label>
                 <div class="day-select-row">
                   ${daysShort
@@ -1347,7 +1698,7 @@ class AlarmsPanelCard extends HTMLElement {
                 </div>
               </div>
 
-              <div class="form-group">
+              <div class="form-group full-width">
                 <label>Theme Color</label>
                 <div class="color-swatches">
                   ${colors
@@ -1362,82 +1713,48 @@ class AlarmsPanelCard extends HTMLElement {
                 </div>
               </div>
 
-              <div class="form-group">
+              <div class="form-group full-width">
                 <label>Alarm Sound</label>
                 <div class="sound-row">
-                  <div class="custom-dropdown-container">
-                    <button type="button" class="custom-dropdown-trigger" id="sound-trigger">
-                      <span>${currentSoundName}</span>
-                      <span class="arrow">&#9662;</span>
-                    </button>
-                    <div class="custom-dropdown-options sound-options ${this._soundDropdownOpen ? 'open' : ''}">
-                      ${sounds
-                        .map(
-                          (s) => `
-                            <div class="custom-dropdown-option ${this._formState.sound === s.file ? 'selected' : ''}" data-value="${s.file}">
-                              ${s.name}
-                            </div>
-                          `
-                        )
-                        .join("")}
-                    </div>
-                  </div>
-                  <button type="button" class="preview-btn">🔊 Preview</button>
-                </div>
-              </div>
-
-              <div class="form-group">
-                <label for="snooze_duration">Snooze Duration (minutes)</label>
-                <input type="number" id="snooze_duration" class="input-text" min="1" max="60" style="width: 80px;" value="${this._formState.snooze_duration
-      }">
-              </div>
-
-              <div class="form-group">
-                <label>Output Speaker (Optional, plays in house)</label>
-                <div class="custom-dropdown-container">
-                  <button type="button" class="custom-dropdown-trigger" id="mp-trigger">
-                    <span>${currentMpName}</span>
-                    <span class="arrow">&#9662;</span>
-                  </button>
-                  <div class="custom-dropdown-options mp-options ${this._mpDropdownOpen ? 'open' : ''}">
-                    <div class="custom-dropdown-option ${this._formState.media_player === '' ? 'selected' : ''}" data-value="">
-                      Browser Only
-                    </div>
-                    ${this._mediaPlayers
-                      .map(
-                        (mp) => `
-                          <div class="custom-dropdown-option ${this._formState.media_player === mp.entity_id ? 'selected' : ''}" data-value="${mp.entity_id}">
-                            ${mp.name}
-                          </div>
-                        `
-                      )
+                  <select id="sound" class="select-input">
+                    ${sounds
+                      .map((s) => `
+                        <option value="${this._escapeHtml(s.file)}" ${this._formState.sound === s.file ? "selected" : ""}>
+                          ${this._escapeHtml(s.name)}
+                        </option>
+                      `)
                       .join("")}
-                  </div>
+                  </select>
+                  <button type="button" class="preview-btn">Preview</button>
                 </div>
               </div>
 
               <div class="form-group">
-                <label>Area (Optional)</label>
-                <div class="custom-dropdown-container">
-                  <button type="button" class="custom-dropdown-trigger" id="area-trigger">
-                    <span>${currentAreaName}</span>
-                    <span class="arrow">&#9662;</span>
-                  </button>
-                  <div class="custom-dropdown-options area-options ${this._areaDropdownOpen ? 'open' : ''}">
-                    <div class="custom-dropdown-option ${this._formState.area_id === '' ? 'selected' : ''}" data-value="">
-                      No Area
-                    </div>
-                    ${areas
-                      .map(
-                        (area) => `
-                          <div class="custom-dropdown-option ${this._formState.area_id === area.area_id ? 'selected' : ''}" data-value="${area.area_id}">
-                            ${area.name}
-                          </div>
-                        `
-                      )
-                      .join("")}
-                  </div>
-                </div>
+                <label for="media_player">Output Speaker (Optional)</label>
+                <select id="media_player" class="select-input">
+                  <option value="" ${this._formState.media_player === "" ? "selected" : ""}>Browser Only</option>
+                  ${this._mediaPlayers
+                    .map((mp) => `
+                      <option value="${this._escapeHtml(mp.entity_id)}" ${this._formState.media_player === mp.entity_id ? "selected" : ""}>
+                        ${this._escapeHtml(mp.name)}
+                      </option>
+                    `)
+                    .join("")}
+                </select>
+              </div>
+
+              <div class="form-group">
+                <label for="area_id">Area (Optional)</label>
+                <select id="area_id" class="select-input">
+                  <option value="" ${this._formState.area_id === "" ? "selected" : ""}>No Area</option>
+                  ${areas
+                    .map((area) => `
+                      <option value="${this._escapeHtml(area.area_id)}" ${this._formState.area_id === area.area_id ? "selected" : ""}>
+                        ${this._escapeHtml(area.name)}
+                      </option>
+                    `)
+                    .join("")}
+                </select>
               </div>
 
               <div class="modal-footer">
@@ -1528,72 +1845,12 @@ class AlarmsPanelCard extends HTMLElement {
       });
     });
 
-    // Custom sound and media player dropdown triggers
-    const soundTrigger = shadow.getElementById("sound-trigger");
-    if (soundTrigger) {
-      soundTrigger.addEventListener("click", (e) => {
-        e.stopPropagation();
-        this._soundDropdownOpen = !this._soundDropdownOpen;
-        this._mpDropdownOpen = false;
-        this._areaDropdownOpen = false;
-        this.render();
-      });
-    }
-
-    const mpTrigger = shadow.getElementById("mp-trigger");
-    if (mpTrigger) {
-      mpTrigger.addEventListener("click", (e) => {
-        e.stopPropagation();
-        this._mpDropdownOpen = !this._mpDropdownOpen;
-        this._soundDropdownOpen = false;
-        this._areaDropdownOpen = false;
-        this.render();
-      });
-    }
-
-    const areaTrigger = shadow.getElementById("area-trigger");
-    if (areaTrigger) {
-      areaTrigger.addEventListener("click", (e) => {
-        e.stopPropagation();
-        this._areaDropdownOpen = !this._areaDropdownOpen;
-        this._soundDropdownOpen = false;
-        this._mpDropdownOpen = false;
-        this.render();
-      });
-    }
-
-    // Custom dropdown option clicks
-    shadow.querySelectorAll(".custom-dropdown-option").forEach((opt) => {
-      opt.addEventListener("click", (e) => {
-        e.stopPropagation();
-        const val = opt.getAttribute("data-value");
-        const parent = opt.parentElement;
-        if (parent.classList.contains("sound-options")) {
-          this._formState.sound = val;
-          this._soundDropdownOpen = false;
-        } else if (parent.classList.contains("mp-options")) {
-          this._formState.media_player = val || "";
-          this._mpDropdownOpen = false;
-        } else if (parent.classList.contains("area-options")) {
-          this._formState.area_id = val || "";
-          this._areaDropdownOpen = false;
-        }
-        this.render();
-      });
-    });
-
-    // Close all active dropdowns when clicking anywhere in the card's shadow root
-    shadow.addEventListener("click", () => {
-      this._soundDropdownOpen = false;
-      this._mpDropdownOpen = false;
-      this._areaDropdownOpen = false;
+    // Close row option menus when clicking anywhere in the card's shadow root
+    shadow.onclick = () => {
       shadow.querySelectorAll(".dropdown-menu").forEach((m) => {
         m.classList.remove("open");
       });
-      shadow.querySelectorAll(".custom-dropdown-options").forEach((d) => {
-        d.classList.remove("open");
-      });
-    });
+    };
 
     // Modal Close buttons
     const closeModalBtn = shadow.querySelector(".close-modal-btn");
@@ -1603,6 +1860,15 @@ class AlarmsPanelCard extends HTMLElement {
     const btnCancel = shadow.querySelector(".btn-cancel");
     if (btnCancel) {
       btnCancel.addEventListener("click", () => this._closeModal());
+    }
+
+    const modalOverlay = shadow.querySelector(".modal-overlay");
+    if (modalOverlay) {
+      modalOverlay.addEventListener("click", (e) => {
+        if (e.target === modalOverlay) {
+          this._closeModal();
+        }
+      });
     }
 
     // Day multi-selector in Modal
@@ -1653,6 +1919,27 @@ class AlarmsPanelCard extends HTMLElement {
     if (snoozeInput) {
       snoozeInput.addEventListener("input", (e) => {
         this._formState.snooze_duration = parseInt(e.target.value, 10) || 1;
+      });
+    }
+
+    const soundSelect = shadow.getElementById("sound");
+    if (soundSelect) {
+      soundSelect.addEventListener("change", (e) => {
+        this._formState.sound = e.target.value;
+      });
+    }
+
+    const mediaPlayerSelect = shadow.getElementById("media_player");
+    if (mediaPlayerSelect) {
+      mediaPlayerSelect.addEventListener("change", (e) => {
+        this._formState.media_player = e.target.value || "";
+      });
+    }
+
+    const areaSelect = shadow.getElementById("area_id");
+    if (areaSelect) {
+      areaSelect.addEventListener("change", (e) => {
+        this._formState.area_id = e.target.value || "";
       });
     }
 
