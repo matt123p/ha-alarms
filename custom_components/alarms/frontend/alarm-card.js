@@ -529,7 +529,7 @@ class AlarmsPanelCard extends HTMLElement {
       <style>
         :host {
           display: block;
-          font-family: 'Outfit', 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+          font-family: var(--ha-font-family-body, Roboto, "Noto Sans", sans-serif);
           color: var(--primary-text-color, #2d3748);
           width: 100%;
           max-width: 100%;
@@ -570,7 +570,7 @@ class AlarmsPanelCard extends HTMLElement {
           border: 0;
           border-radius: 0;
           box-shadow: none;
-          gap: 22px;
+          gap: 16px;
         }
 
         .header {
@@ -595,7 +595,7 @@ class AlarmsPanelCard extends HTMLElement {
         }
 
         .panel-page .title-area h2 {
-          font-size: clamp(32px, 5vw, 44px);
+          font-size: clamp(28px, 4vw, 36px);
         }
 
         .clock-area {
@@ -608,14 +608,14 @@ class AlarmsPanelCard extends HTMLElement {
         }
 
         .clock-icon {
-          width: 24px;
-          height: 24px;
-          stroke: #2d3748;
+          width: 20px;
+          height: 20px;
+          stroke: currentColor;
         }
 
         .digital-clock {
-          font-size: clamp(18px, 3vw, 24px);
-          font-weight: 500;
+          font-size: 18px;
+          font-weight: 400;
           letter-spacing: 0;
           color: var(--primary-text-color, #1a202c);
         }
@@ -629,35 +629,35 @@ class AlarmsPanelCard extends HTMLElement {
         .page-summary {
           display: grid;
           grid-template-columns: minmax(260px, 1.4fr) repeat(3, minmax(150px, 1fr));
-          gap: 12px;
+          gap: 8px;
         }
 
         .summary-card {
           background: var(--card-background-color, #ffffff);
           border: 1px solid var(--divider-color, rgba(0,0,0,0.08));
-          border-radius: 12px;
-          padding: 14px 16px;
-          box-shadow: var(--ha-card-box-shadow, 0 2px 8px rgba(0,0,0,0.06));
+          border-radius: var(--ha-card-border-radius, 12px);
+          padding: 11px 14px;
+          box-shadow: var(--ha-card-box-shadow, none);
           min-width: 0;
         }
 
         .summary-card.primary {
-          border-left: 5px solid var(--primary-color, #2b7a94);
+          border-left: 3px solid var(--primary-color, #2b7a94);
         }
 
         .summary-label {
           color: var(--secondary-text-color, #718096);
-          font-size: 12px;
-          font-weight: 800;
+          font-size: 11px;
+          font-weight: 600;
           text-transform: uppercase;
           letter-spacing: 0;
-          margin-bottom: 6px;
+          margin-bottom: 4px;
         }
 
         .summary-value {
           color: var(--primary-text-color, #1a202c);
-          font-size: 22px;
-          font-weight: 750;
+          font-size: 19px;
+          font-weight: 600;
           line-height: 1.15;
           overflow: hidden;
           text-overflow: ellipsis;
@@ -666,9 +666,9 @@ class AlarmsPanelCard extends HTMLElement {
 
         .summary-subvalue {
           color: var(--secondary-text-color, #718096);
-          font-size: 13px;
-          font-weight: 600;
-          margin-top: 4px;
+          font-size: 12px;
+          font-weight: 400;
+          margin-top: 2px;
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: nowrap;
@@ -679,7 +679,7 @@ class AlarmsPanelCard extends HTMLElement {
           color: white;
           border: none;
           padding: 10px 16px;
-          border-radius: 10px;
+          border-radius: var(--ha-button-border-radius, 8px);
           font-weight: 600;
           font-size: 15px;
           cursor: pointer;
@@ -705,9 +705,8 @@ class AlarmsPanelCard extends HTMLElement {
 
         .panel-page .alarms-list {
           display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(min(100%, 390px), 1fr));
-          gap: 14px;
-          align-items: start;
+          grid-template-columns: minmax(0, 1fr);
+          gap: 8px;
         }
 
         .empty-state {
@@ -734,27 +733,24 @@ class AlarmsPanelCard extends HTMLElement {
         .alarm-row {
           background: var(--secondary-background-color, #f8fafc);
           border: 1px solid var(--divider-color, rgba(0,0,0,0.08));
-          border-left: 5px solid var(--alarm-color);
+          border-left: 3px solid var(--alarm-color);
           border-radius: 12px;
-          padding: 14px 16px;
+          padding: 12px 14px;
           transition: background 0.2s, box-shadow 0.2s;
           display: grid;
-          grid-template-columns: minmax(92px, 0.7fr) minmax(140px, 1.2fr) minmax(210px, 1fr) auto auto;
+          grid-template-columns: 82px minmax(150px, 1fr) minmax(224px, auto) auto auto;
           align-items: center;
-          gap: 12px 16px;
+          gap: 8px 14px;
           position: relative;
           min-width: 0;
         }
 
         .panel-page .alarm-row {
-          grid-template-columns: minmax(96px, auto) minmax(0, 1fr) auto;
-          grid-template-areas:
-            "time details menu"
-            "time details actions"
-            "days days days";
-          align-items: start;
-          min-height: 164px;
-          padding: 18px;
+          grid-template-columns: 82px minmax(160px, 1fr) minmax(224px, auto) auto 32px;
+          grid-template-areas: "time details days actions menu";
+          align-items: center;
+          min-height: 0;
+          padding: 12px 14px;
           background: var(--card-background-color, #ffffff);
           box-shadow: var(--ha-card-box-shadow, 0 2px 8px rgba(0,0,0,0.08));
         }
@@ -769,20 +765,19 @@ class AlarmsPanelCard extends HTMLElement {
 
         .panel-page .days-row {
           grid-area: days;
-          grid-column: 1 / -1;
-          width: min(100%, 356px);
-          grid-template-columns: repeat(7, 44px);
-          justify-content: start;
+          grid-column: auto;
+          width: 224px;
+          grid-template-columns: repeat(7, 28px);
         }
 
         .panel-page .day-dot {
-          height: 32px;
+          height: 26px;
         }
 
         .panel-page .switch-container {
           grid-area: actions;
           justify-self: end;
-          align-items: flex-end;
+          align-items: center;
         }
 
         .panel-page .options-container {
@@ -810,8 +805,8 @@ class AlarmsPanelCard extends HTMLElement {
         }
 
         .time-display {
-          font-size: clamp(34px, 5vw, 46px);
-          font-weight: 700;
+          font-size: clamp(28px, 4vw, 36px);
+          font-weight: 500;
           color: var(--primary-text-color, #1a202c);
           letter-spacing: 0;
           line-height: 1;
@@ -826,8 +821,8 @@ class AlarmsPanelCard extends HTMLElement {
         }
 
         .alarm-name {
-          font-size: 20px;
-          font-weight: 600;
+          font-size: 16px;
+          font-weight: 500;
           color: var(--primary-text-color, #1a202c);
           white-space: nowrap;
           overflow: hidden;
@@ -839,7 +834,7 @@ class AlarmsPanelCard extends HTMLElement {
           align-items: center;
           gap: 6px;
           font-size: 12px;
-          font-weight: 700;
+          font-weight: 500;
           color: var(--secondary-text-color, #718096);
           text-transform: uppercase;
           letter-spacing: 0;
@@ -856,21 +851,21 @@ class AlarmsPanelCard extends HTMLElement {
           display: flex;
           gap: 8px;
           flex-wrap: wrap;
-          margin-top: 8px;
+          margin-top: 3px;
           min-width: 0;
         }
 
         .meta-chip {
           background: var(--secondary-background-color, #f7fafc);
           border: 1px solid var(--divider-color, #e2e8f0);
-          border-radius: 8px;
+          border-radius: 6px;
           color: var(--secondary-text-color, #4a5568);
           font-size: 12px;
-          font-weight: 650;
+          font-weight: 400;
           line-height: 1.2;
           min-width: 0;
           max-width: 100%;
-          padding: 6px 8px;
+          padding: 3px 6px;
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: nowrap;
@@ -903,7 +898,7 @@ class AlarmsPanelCard extends HTMLElement {
           flex-direction: column;
           align-items: center;
           gap: 6px;
-          min-width: 84px;
+          min-width: 72px;
         }
 
         .switch {
@@ -994,22 +989,22 @@ class AlarmsPanelCard extends HTMLElement {
         /* Badges */
         .days-row {
           display: grid;
-          grid-template-columns: repeat(7, minmax(36px, 1fr));
-          gap: 6px;
-          width: min(100%, 336px);
+          grid-template-columns: repeat(7, minmax(28px, 1fr));
+          gap: 4px;
+          width: min(100%, 252px);
           min-width: 0;
         }
 
         .day-dot {
           width: 100%;
           min-width: 0;
-          height: 30px;
+          height: 26px;
           border-radius: 999px;
           display: flex;
           align-items: center;
           justify-content: center;
-          font-size: 11px;
-          font-weight: 700;
+          font-size: 10px;
+          font-weight: 500;
           background: var(--secondary-background-color, #f7fafc);
           color: var(--secondary-text-color, #718096);
           border: 1px solid var(--divider-color, rgba(0,0,0,0.08));
@@ -1286,20 +1281,21 @@ class AlarmsPanelCard extends HTMLElement {
         /* Custom Day Selector in Form */
         .day-select-row {
           display: grid;
-          grid-template-columns: repeat(7, minmax(32px, 1fr));
-          gap: 8px;
+          grid-template-columns: repeat(7, 38px);
+          gap: 6px;
+          justify-content: start;
           margin-top: 4px;
         }
 
         .day-select-btn {
-          width: 100%;
-          height: 40px;
-          border-radius: 10px;
+          width: 38px;
+          height: 32px;
+          border-radius: 8px;
           border: 1px solid #e2e8f0;
           background: #f7fafc;
           color: #718096;
-          font-size: 13px;
-          font-weight: 700;
+          font-size: 11px;
+          font-weight: 500;
           cursor: pointer;
           display: flex;
           align-items: center;
@@ -1315,7 +1311,7 @@ class AlarmsPanelCard extends HTMLElement {
           background: var(--form-color, #2b7a94);
           color: white;
           border-color: var(--form-color, #2b7a94);
-          box-shadow: 0 4px 12px rgba(43, 122, 148, 0.2);
+          box-shadow: none;
         }
 
         /* Color Selection Swatches */
@@ -1429,6 +1425,18 @@ class AlarmsPanelCard extends HTMLElement {
             grid-template-columns: minmax(92px, auto) minmax(0, 1fr) auto;
           }
 
+          .panel-page .alarm-row {
+            grid-template-columns: 82px minmax(0, 1fr) auto;
+            grid-template-areas:
+              "time details menu"
+              "days days actions";
+          }
+
+          .panel-page .days-row {
+            grid-column: auto;
+            width: 224px;
+          }
+
           .card-page .days-row {
             grid-column: 1 / -1;
             width: 100%;
@@ -1468,11 +1476,28 @@ class AlarmsPanelCard extends HTMLElement {
               "actions actions";
           }
 
+          .panel-page .alarm-row {
+            grid-template-columns: minmax(0, 1fr) auto;
+            grid-template-areas:
+              "time menu"
+              "details details"
+              "days days"
+              "actions actions";
+          }
+
+          .panel-page .days-row {
+            width: min(100%, 252px);
+          }
+
           .time-display { grid-area: time; }
           .alarm-details { grid-area: details; }
           .days-row { grid-area: days; }
           .switch-container {
             grid-area: actions;
+            justify-self: stretch;
+            align-items: flex-start;
+          }
+          .panel-page .switch-container {
             justify-self: stretch;
             align-items: flex-start;
           }
@@ -1483,6 +1508,14 @@ class AlarmsPanelCard extends HTMLElement {
 
           .alarm-name {
             white-space: normal;
+          }
+
+          .day-select-row {
+            grid-template-columns: repeat(7, minmax(0, 1fr));
+          }
+
+          .day-select-btn {
+            width: 100%;
           }
 
           #alarm-form {

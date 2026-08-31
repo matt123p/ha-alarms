@@ -7,3 +7,4 @@
 - Scope voice snooze and dismiss commands to active alarms in the satellite's area when available.
 - Allow untargeted `alarms.stop`, `alarms.dismiss`, and `alarms.snooze` service calls to act on all applicable active alarms.
 - Add intent descriptions and schemas suitable for LLM tool discovery.
+- Refresh the alarms screen with Home Assistant typography, more compact alarm cards, smaller day controls, and cleaner responsive spacing.
