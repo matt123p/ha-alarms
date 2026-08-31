@@ -202,6 +202,7 @@ from tests.test_intents import (
     test_delete_intent,
     test_update_intent,
     test_intent_invalid_area,
+    test_voice_satellite_area_defaults_and_scoping,
 )
 
 
@@ -222,6 +223,7 @@ async def main() -> None:
     await test_delete_intent()
     await test_update_intent()
     await test_intent_invalid_area()
+    await test_voice_satellite_area_defaults_and_scoping()
     print("[OK] Intent tests passed.")
 
     print("\nRunning coordinator tests...")

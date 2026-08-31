@@ -10,7 +10,9 @@ from homeassistant.components import panel_custom, websocket_api
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall, callback
+from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import intent
 from homeassistant.helpers.network import get_url
@@ -123,6 +125,39 @@ def get_alarm_id_from_entity(hass: HomeAssistant, entity_id: str) -> str | None:
     return None
 
 
+def get_area_id_from_device(hass: HomeAssistant, device_id: str | None) -> str | None:
+    """Resolve the Home Assistant area assigned to an Assist satellite device."""
+    if not device_id:
+        return None
+    device = dr.async_get(hass).async_get(device_id)
+    return device.area_id if device else None
+
+
+def get_intent_area_id(intent_obj: intent.Intent) -> str | None:
+    """Return an explicit intent area or fall back to the requesting device area."""
+    area_slot = intent_obj.slots.get("area")
+    if area_slot and area_slot.get("value"):
+        area_value = str(area_slot["value"]).strip()
+        area_registry = ar.async_get(intent_obj.hass)
+        normalized = area_value.replace("_", " ").lower()
+        for area in area_registry.areas.values():
+            if normalized in (area.id.replace("_", " ").lower(), area.name.lower()):
+                return area.id
+        return area_value
+    return get_area_id_from_device(intent_obj.hass, getattr(intent_obj, "device_id", None))
+
+
+def alarms_for_intent_area(
+    intent_obj: intent.Intent,
+    alarms: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Limit alarms to the requesting satellite's area when one is known."""
+    area_id = get_intent_area_id(intent_obj)
+    if area_id is None:
+        return alarms
+    return [alarm for alarm in alarms if alarm.get("area_id") == area_id]
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Alarms integration from config entry."""
     coordinator = AlarmsCoordinator(hass, entry.entry_id)
@@ -159,7 +194,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if "frontend" in hass.config.components:
         from homeassistant.loader import async_get_integration
         integration = await async_get_integration(hass, DOMAIN)
-        version = integration.version or "1.0.1"
+        version = integration.version or "1.0.2"
 
         await panel_custom.async_register_panel(
             hass,
@@ -206,6 +241,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         if not alarm_id and entity_id:
             alarm_id = get_alarm_id_from_entity(hass, entity_id)
+
+        if not alarm_id and action in ("snooze", "dismiss", "stop"):
+            applicable_states = (
+                (STATE_RINGING,)
+                if action == "snooze"
+                else (STATE_RINGING, STATE_SNOOZED)
+            )
+            matching = [
+                alarm
+                for alarm in coordinator.alarms.values()
+                if alarm["status"] in applicable_states
+            ]
+            for alarm in matching:
+                if action == "snooze":
+                    await coordinator.async_snooze_alarm(
+                        alarm["id"], call.data.get("duration")
+                    )
+                else:
+                    await coordinator.async_stop_alarm(alarm["id"])
+            return
 
         if not alarm_id:
             raise vol.Invalid("Must specify either alarm_id or entity_id")
@@ -582,6 +637,8 @@ class AlarmsSnoozeIntentHandler(intent.IntentHandler):
     """Handler to snooze ringing alarms via voice assistant (Assist)."""
 
     intent_type = "AlarmsSnooze"
+    description = "Snoozes ringing alarms in the voice satellite's room"
+    slot_schema = {vol.Optional("area"): cv.string}
 
     async def async_handle(self, intent_obj: intent.Intent) -> intent.IntentResponse:
         """Handle the voice intent."""
@@ -591,7 +648,10 @@ class AlarmsSnoozeIntentHandler(intent.IntentHandler):
             set_response_error(response, "Sorry, the alarms integration is not loaded.")
             return response
 
-        ringing = [a for a in coordinator.alarms.values() if a["status"] == STATE_RINGING]
+        ringing = alarms_for_intent_area(
+            intent_obj,
+            [a for a in coordinator.alarms.values() if a["status"] == STATE_RINGING],
+        )
         if not ringing:
             response = intent_obj.create_response()
             set_response_error(response, "There are no alarms ringing right now.")
@@ -609,6 +669,8 @@ class AlarmsDismissIntentHandler(intent.IntentHandler):
     """Handler to dismiss ringing or snoozed alarms via voice assistant (Assist)."""
 
     intent_type = "AlarmsDismiss"
+    description = "Stops ringing or snoozed alarms in the voice satellite's room"
+    slot_schema = {vol.Optional("area"): cv.string}
 
     async def async_handle(self, intent_obj: intent.Intent) -> intent.IntentResponse:
         """Handle the voice intent."""
@@ -618,10 +680,14 @@ class AlarmsDismissIntentHandler(intent.IntentHandler):
             set_response_error(response, "Sorry, the alarms integration is not loaded.")
             return response
 
-        active = [
-            a for a in coordinator.alarms.values()
-            if a["status"] in (STATE_RINGING, STATE_SNOOZED)
-        ]
+        active = alarms_for_intent_area(
+            intent_obj,
+            [
+                a
+                for a in coordinator.alarms.values()
+                if a["status"] in (STATE_RINGING, STATE_SNOOZED)
+            ],
+        )
         if not active:
             response = intent_obj.create_response()
             set_response_error(response, "There are no active or snoozed alarms ringing right now.")
@@ -639,6 +705,7 @@ class AlarmsCreateIntentHandler(intent.IntentHandler):
     """Handler to create a new alarm via voice assistant (Assist)."""
 
     intent_type = "AlarmsCreate"
+    description = "Creates a wake-up alarm, defaulting to the voice satellite's room"
     slot_schema = {
         vol.Required("time"): cv.string,
         vol.Optional("name"): cv.string,
@@ -693,23 +760,21 @@ class AlarmsCreateIntentHandler(intent.IntentHandler):
             days_val = intent_obj.slots["days"]["value"]
             days = parse_days(days_val)
 
-        # Resolve area to area_id
-        area_id = None
+        # Use an explicit area, otherwise default to the requesting satellite's area.
+        area_id = get_intent_area_id(intent_obj)
         area_name_speech = None
-        if "area" in intent_obj.slots:
-            area_val = intent_obj.slots["area"]["value"]
-            area_name_speech = area_val
-            try:
-                from homeassistant.helpers import area_registry as ar
-                area_reg = ar.async_get(intent_obj.hass)
-                if area_reg and hasattr(area_reg, "areas"):
-                    for area_entry in area_reg.areas.values():
-                        if area_entry.name.lower() == area_val.lower() or area_entry.id.lower() == area_val.lower():
-                            area_id = area_entry.id
-                            area_name_speech = area_entry.name
-                            break
-            except Exception:
-                pass
+        if area_id:
+            area_entry = next(
+                (
+                    area
+                    for area in ar.async_get(intent_obj.hass).areas.values()
+                    if area.id == area_id
+                ),
+                None,
+            )
+            area_name_speech = (
+                area_entry.name if area_entry else area_id.replace("_", " ")
+            )
 
         try:
             await coordinator.async_create_alarm(
@@ -750,6 +815,7 @@ class AlarmsDeleteIntentHandler(intent.IntentHandler):
     """Handler to delete an alarm via voice assistant (Assist)."""
 
     intent_type = "AlarmsDelete"
+    description = "Deletes an existing alarm by name, time, or alarm ID"
     slot_schema = {
         vol.Optional("alarm_id"): cv.string,
         vol.Optional("name"): cv.string,
@@ -803,6 +869,7 @@ class AlarmsUpdateIntentHandler(intent.IntentHandler):
     """Handler to update/edit an existing alarm via voice assistant (Assist)."""
 
     intent_type = "AlarmsUpdate"
+    description = "Updates an existing alarm's name, time, repetition, or room"
     slot_schema = {
         vol.Optional("alarm_id"): cv.string,
         vol.Optional("name"): cv.string,
@@ -943,4 +1010,3 @@ class AlarmsUpdateIntentHandler(intent.IntentHandler):
             f"I have updated the alarm '{target_alarm['name']}': " + " and ".join(speech_parts) + "."
         )
         return response
-

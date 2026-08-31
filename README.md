@@ -21,8 +21,9 @@ An integration specifically designed to expose custom wake-up alarms to **Voice 
 ## What does it do?
 
 By default, Home Assistant lacks native support for managing alarms via voice pipelines. This integration bridges that gap by:
-1. **Exposing Intent Tool Schemas**: Implements explicit `slot_schema` parameters on custom intents (`AlarmsCreate`, `AlarmsDelete`, `AlarmsUpdate`, `AlarmsSnooze`, `AlarmsDismiss`) so LLMs can discover, validate, and invoke them as tool calls.
+1. **Native LLM Tools**: Contributes `AlarmsCreate`, `AlarmsDelete`, `AlarmsUpdate`, `AlarmsSnooze`, and `AlarmsDismiss` to Home Assistant's Assist LLM API using the integration's `llm.py` platform.
 2. **LLM State Ingestion**: Exposes a master `sensor.alarm_clock_system` and `sensor.alarms_list` containing a structured list of all alarms, schedules, and active statuses within their state attributes, allowing LLMs to inspect the full alarm state.
+3. **Room-aware voice control**: When no room is named, alarms created, snoozed, or dismissed by voice use the area assigned to the voice satellite in Home Assistant.
 
 ---
 
@@ -65,8 +66,10 @@ type: custom:alarms-panel
 - `AlarmsSnooze`: Snooze ringing alarms.
 - `AlarmsDismiss`: Stop active ringing/snoozed alarms.
 
+The voice satellite must belong to a Home Assistant area for automatic room selection. An explicitly requested room always takes precedence. If no room can be resolved, Snooze and Dismiss retain their whole-system behaviour.
+
 ### Custom Actions (Services)
-All intents are also available as actions under the `alarms` domain (`alarms.create`, `alarms.delete`, `alarms.snooze`, `alarms.dismiss`, `alarms.skip_next`, `alarms.unskip_next`).
+All intents are also available as actions under the `alarms` domain (`alarms.create`, `alarms.delete`, `alarms.snooze`, `alarms.dismiss`, `alarms.stop`, `alarms.skip_next`, `alarms.unskip_next`). Calling Snooze, Dismiss, or Stop without an alarm target applies it to all currently applicable alarms.
 
 ### Events
 Trigger custom automations on the HA Event Bus:

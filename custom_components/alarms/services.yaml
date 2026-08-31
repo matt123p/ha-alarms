@@ -172,7 +172,7 @@ update:
 
 stop:
   name: Stop Alarm
-  description: Stop/dismiss a currently ringing or snoozed alarm.
+  description: Stop/dismiss a targeted alarm, or all currently ringing or snoozed alarms when no target is supplied.
   fields:
     alarm_id:
       name: Alarm ID
@@ -190,7 +190,7 @@ stop:
 
 dismiss:
   name: Dismiss Alarm
-  description: Stop/dismiss a currently ringing or snoozed alarm (alias of stop).
+  description: Stop/dismiss a targeted alarm, or all currently ringing or snoozed alarms when no target is supplied (alias of stop).
   fields:
     alarm_id:
       name: Alarm ID
@@ -208,7 +208,7 @@ dismiss:
 
 snooze:
   name: Snooze Alarm
-  description: Snooze a currently ringing alarm.
+  description: Snooze a targeted alarm, or all currently ringing alarms when no target is supplied.
   fields:
     alarm_id:
       name: Alarm ID

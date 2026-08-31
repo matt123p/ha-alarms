@@ -7,6 +7,8 @@ from custom_components.alarms.__init__ import (
     parse_days,
     AlarmsCreateIntentHandler,
     AlarmsDeleteIntentHandler,
+    AlarmsDismissIntentHandler,
+    AlarmsSnoozeIntentHandler,
     AlarmsUpdateIntentHandler,
 )
 
@@ -26,9 +28,10 @@ class MockIntentResponse:
 
 
 class MockIntent:
-    def __init__(self, hass, slots):
+    def __init__(self, hass, slots, device_id=None):
         self.hass = hass
         self.slots = slots
+        self.device_id = device_id
 
     def create_response(self):
         return MockIntentResponse()
@@ -242,3 +245,57 @@ async def test_intent_invalid_area():
         assert response.response_type == "error"
         assert "Invalid location/area" in response.speech_text
 
+
+@pytest.mark.asyncio
+async def test_voice_satellite_area_defaults_and_scoping():
+    mock_hass = MagicMock()
+    mock_device = MagicMock(area_id="bedroom")
+    mock_device_registry = MagicMock()
+    mock_device_registry.async_get.return_value = mock_device
+    mock_area = MagicMock(id="bedroom", name="Bedroom")
+    mock_area_registry = MagicMock()
+    mock_area_registry.areas = {"bedroom": mock_area}
+
+    coordinator = MagicMock()
+    coordinator.async_create_alarm = AsyncMock(return_value="created")
+    coordinator.async_snooze_alarm = AsyncMock()
+    coordinator.async_dismiss_alarm = AsyncMock()
+    coordinator.alarms = {
+        "bedroom": {
+            "id": "bedroom",
+            "name": "Bedroom alarm",
+            "time": datetime.time(7, 0),
+            "area_id": "bedroom",
+            "status": "ringing",
+        },
+        "kitchen": {
+            "id": "kitchen",
+            "name": "Kitchen alarm",
+            "time": datetime.time(7, 0),
+            "area_id": "kitchen",
+            "status": "ringing",
+        },
+    }
+
+    with (
+        patch("custom_components.alarms.__init__.get_coordinator", return_value=coordinator),
+        patch("homeassistant.helpers.device_registry.async_get", return_value=mock_device_registry),
+        patch("homeassistant.helpers.area_registry.async_get", return_value=mock_area_registry),
+    ):
+        create_response = await AlarmsCreateIntentHandler().async_handle(
+            MockIntent(mock_hass, {"time": {"value": "7:00 AM"}}, "satellite")
+        )
+        snooze_response = await AlarmsSnoozeIntentHandler().async_handle(
+            MockIntent(mock_hass, {}, "satellite")
+        )
+        dismiss_response = await AlarmsDismissIntentHandler().async_handle(
+            MockIntent(mock_hass, {}, "satellite")
+        )
+
+    assert create_response.response_type == "action_done"
+    assert "Bedroom" in create_response.speech_text
+    assert coordinator.async_create_alarm.call_args.kwargs["area_id"] == "bedroom"
+    coordinator.async_snooze_alarm.assert_awaited_once_with("bedroom")
+    coordinator.async_dismiss_alarm.assert_awaited_once_with("bedroom")
+    assert "Snoozed 1 alarm" in snooze_response.speech_text
+    assert "Stopped 1 alarm" in dismiss_response.speech_text
