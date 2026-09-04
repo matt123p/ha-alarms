@@ -1,14 +1,14 @@
 language: "en"
 intents:
-  AlarmsSnooze:
+  alarms__snooze:
     data:
       - sentences:
           - "snooze [[the|my] alarm]"
-  AlarmsDismiss:
+  alarms__dismiss:
     data:
       - sentences:
           - "(stop|dismiss|turn off|silence) [[the] alarm]"
-  AlarmsCreate:
+  alarms__create:
     data:
       - sentences:
           - "(create|set|add) [an] alarm (at|for|to sound at|to go off at) {time}"
@@ -17,15 +17,14 @@ intents:
           - "(create|set|add) [an] alarm [named] {name} (at|for|to sound at|to go off at) {time} [on] [repeating] {days}"
           - "(create|set|add) [an] alarm (at|for|to sound at|to go off at) {time} [named] {name}"
           - "(create|set|add) [an] alarm (at|for|to sound at|to go off at) {time} [on] [repeating] {days} [named] {name}"
-  AlarmsDelete:
+  alarms__delete:
     data:
       - sentences:
           - "(delete|remove) [the] alarm [at|named] {name}"
           - "(delete|remove) [the] alarm"
-  AlarmsUpdate:
+  alarms__update:
     data:
       - sentences:
           - "(change|set) [the] alarm [at|named] {name} [time] to {new_time}"
           - "rename [the] alarm [at|named] {name} to {new_name}"
           - "change [the] alarm [at|named] {name} repetition to {new_days}"
-

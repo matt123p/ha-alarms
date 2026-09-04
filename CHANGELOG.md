@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.3 - 2026-09-04
+
+- Prefix Assist LLM tool names with `alarms__`, as required for custom integrations.
+
 ## 1.0.2 - 2026-08-31
 
 - Expose alarm creation, update, deletion, snooze, and dismissal as native Home Assistant Assist LLM tools.

@@ -636,7 +636,7 @@ def set_response_error(response: Any, message: str) -> None:
 class AlarmsSnoozeIntentHandler(intent.IntentHandler):
     """Handler to snooze ringing alarms via voice assistant (Assist)."""
 
-    intent_type = "AlarmsSnooze"
+    intent_type = "alarms__snooze"
     description = "Snoozes ringing alarms in the voice satellite's room"
     slot_schema = {vol.Optional("area"): cv.string}
 
@@ -668,7 +668,7 @@ class AlarmsSnoozeIntentHandler(intent.IntentHandler):
 class AlarmsDismissIntentHandler(intent.IntentHandler):
     """Handler to dismiss ringing or snoozed alarms via voice assistant (Assist)."""
 
-    intent_type = "AlarmsDismiss"
+    intent_type = "alarms__dismiss"
     description = "Stops ringing or snoozed alarms in the voice satellite's room"
     slot_schema = {vol.Optional("area"): cv.string}
 
@@ -704,7 +704,7 @@ class AlarmsDismissIntentHandler(intent.IntentHandler):
 class AlarmsCreateIntentHandler(intent.IntentHandler):
     """Handler to create a new alarm via voice assistant (Assist)."""
 
-    intent_type = "AlarmsCreate"
+    intent_type = "alarms__create"
     description = "Creates a wake-up alarm, defaulting to the voice satellite's room"
     slot_schema = {
         vol.Required("time"): cv.string,
@@ -814,7 +814,7 @@ class AlarmsCreateIntentHandler(intent.IntentHandler):
 class AlarmsDeleteIntentHandler(intent.IntentHandler):
     """Handler to delete an alarm via voice assistant (Assist)."""
 
-    intent_type = "AlarmsDelete"
+    intent_type = "alarms__delete"
     description = "Deletes an existing alarm by name, time, or alarm ID"
     slot_schema = {
         vol.Optional("alarm_id"): cv.string,
@@ -868,7 +868,7 @@ class AlarmsDeleteIntentHandler(intent.IntentHandler):
 class AlarmsUpdateIntentHandler(intent.IntentHandler):
     """Handler to update/edit an existing alarm via voice assistant (Assist)."""
 
-    intent_type = "AlarmsUpdate"
+    intent_type = "alarms__update"
     description = "Updates an existing alarm's name, time, repetition, or room"
     slot_schema = {
         vol.Optional("alarm_id"): cv.string,

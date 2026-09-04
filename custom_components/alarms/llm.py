@@ -6,11 +6,11 @@ from homeassistant.helpers import intent
 from homeassistant.helpers.llm import LLM_API_ASSIST, IntentTool, LLMContext, Tool
 
 LLM_INTENTS = (
-    "AlarmsCreate",
-    "AlarmsDelete",
-    "AlarmsUpdate",
-    "AlarmsSnooze",
-    "AlarmsDismiss",
+    "alarms__create",
+    "alarms__delete",
+    "alarms__update",
+    "alarms__snooze",
+    "alarms__dismiss",
 )
 
 

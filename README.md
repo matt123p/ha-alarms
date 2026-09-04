@@ -21,7 +21,7 @@ An integration specifically designed to expose custom wake-up alarms to **Voice 
 ## What does it do?
 
 By default, Home Assistant lacks native support for managing alarms via voice pipelines. This integration bridges that gap by:
-1. **Native LLM Tools**: Contributes `AlarmsCreate`, `AlarmsDelete`, `AlarmsUpdate`, `AlarmsSnooze`, and `AlarmsDismiss` to Home Assistant's Assist LLM API using the integration's `llm.py` platform.
+1. **Native LLM Tools**: Contributes `alarms__create`, `alarms__delete`, `alarms__update`, `alarms__snooze`, and `alarms__dismiss` to Home Assistant's Assist LLM API using the integration's `llm.py` platform.
 2. **LLM State Ingestion**: Exposes a master `sensor.alarm_clock_system` and `sensor.alarms_list` containing a structured list of all alarms, schedules, and active statuses within their state attributes, allowing LLMs to inspect the full alarm state.
 3. **Room-aware voice control**: When no room is named, alarms created, snoozed, or dismissed by voice use the area assigned to the voice satellite in Home Assistant.
 
@@ -60,11 +60,11 @@ type: custom:alarms-panel
 ## Developer Reference
 
 ### Custom Intents (Exposed to LLMs)
-- `AlarmsCreate`: Create a new alarm (`time` [Required], `name`, `days`).
-- `AlarmsDelete`: Delete an alarm (`alarm_id`, `name`).
-- `AlarmsUpdate`: Edit an existing alarm (`alarm_id`, `name`, `new_name`, `new_time`, `new_days`).
-- `AlarmsSnooze`: Snooze ringing alarms.
-- `AlarmsDismiss`: Stop active ringing/snoozed alarms.
+- `alarms__create`: Create a new alarm (`time` [Required], `name`, `days`).
+- `alarms__delete`: Delete an alarm (`alarm_id`, `name`).
+- `alarms__update`: Edit an existing alarm (`alarm_id`, `name`, `new_name`, `new_time`, `new_days`).
+- `alarms__snooze`: Snooze ringing alarms.
+- `alarms__dismiss`: Stop active ringing/snoozed alarms.
 
 The voice satellite must belong to a Home Assistant area for automatic room selection. An explicitly requested room always takes precedence. If no room can be resolved, Snooze and Dismiss retain their whole-system behaviour.
 
