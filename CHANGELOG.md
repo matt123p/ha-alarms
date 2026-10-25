@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.0.4 - 2026-10-25
 
 - Store alarms per satellite device instead of controlling room alarms centrally.
 - Publish precomputed occurrence queues and remote playback commands over WebSocket and HA events, with sync/report actions for adapters.
