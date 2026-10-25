@@ -69,6 +69,9 @@ class AlarmsCoordinator:
                 alarm = dict(alarm_data)
                 alarm["time"] = datetime.time.fromisoformat(alarm["time"])
                 alarm.setdefault("device_id", None)
+                # Drop fields removed in 1.0.5 rather than republishing them
+                for legacy in ("color", "sound", "media_player"):
+                    alarm.pop(legacy, None)
                 
                 if alarm.get("next_trigger"):
                     alarm["next_trigger"] = dt_util.parse_datetime(alarm["next_trigger"])
@@ -213,11 +216,8 @@ class AlarmsCoordinator:
         self,
         name: str,
         time_val: datetime.time,
-        color: str = "#3498db",
-        sound: str = "digital.wav",
         days: list[int] | None = None,
         snooze_duration: int = 5,
-        media_player: str | None = None,
         device_id: str | None = None,
     ) -> str:
         """Create a new alarm."""
@@ -235,8 +235,6 @@ class AlarmsCoordinator:
             "device_id": device_id,
             "name": name,
             "time": time_val,
-            "color": color,
-            "sound": sound,
             "days": days_list,
             "enabled": True,
             "snooze_duration": snooze_duration,
@@ -244,7 +242,6 @@ class AlarmsCoordinator:
             "status": STATE_IDLE,
             "snoozed_until": None,
             "next_trigger": next_trigger,
-            "media_player": media_player,
             "area_id": None,
         }
 
@@ -298,11 +295,8 @@ class AlarmsCoordinator:
         alarm_id: str,
         name: str | None = UNDEFINED,
         time_val: datetime.time | None = UNDEFINED,
-        color: str | None = UNDEFINED,
-        sound: str | None = UNDEFINED,
         days: list[int] | None = UNDEFINED,
         snooze_duration: int | None = UNDEFINED,
-        media_player: str | None = UNDEFINED,
         device_id: str | None = UNDEFINED,
     ) -> None:
         """Update alarm attributes."""
@@ -320,16 +314,10 @@ class AlarmsCoordinator:
             alarm["name"] = name
         if time_val is not UNDEFINED:
             alarm["time"] = time_val
-        if color is not UNDEFINED:
-            alarm["color"] = color
-        if sound is not UNDEFINED:
-            alarm["sound"] = sound
         if days is not UNDEFINED:
             alarm["days"] = days
         if snooze_duration is not UNDEFINED:
             alarm["snooze_duration"] = snooze_duration
-        if media_player is not UNDEFINED:
-            alarm["media_player"] = media_player
 
         # Recalculate next trigger if enabled
         if alarm["enabled"]:
@@ -513,10 +501,7 @@ class AlarmsCoordinator:
             {
                 "alarm_id": alarm_id,
                 "name": alarm["name"],
-                "color": alarm["color"],
-                "sound": alarm["sound"],
-                "entity_id": f"switch.{alarm['name'].lower().replace(' ', '_')}_enabled",
-                "media_player": alarm.get("media_player"),
+                "device_id": alarm.get("device_id"),
                 "area_id": alarm.get("area_id"),
             },
         )

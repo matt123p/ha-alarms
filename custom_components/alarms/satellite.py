@@ -26,7 +26,7 @@ async def async_command(coordinator: Any, device_id: str, command: Any) -> dict[
     fields = command.get("fields", {})
     if not isinstance(fields, dict):
         raise ValueError("fields must be an object")
-    allowed = {"name", "time", "days", "color", "sound", "snooze_duration", "media_player"}
+    allowed = {"name", "time", "days", "snooze_duration"}
     if set(command) - {"action", "request_id", "alarm_id", "fields", "duration"}:
         raise ValueError("Unknown command property")
     if set(fields) - allowed:
@@ -34,13 +34,8 @@ async def async_command(coordinator: Any, device_id: str, command: Any) -> dict[
     if fields and action not in ("create", "update"):
         raise ValueError("fields only applies to create and update")
     updates = dict(fields)
-    for key in ("name", "color", "sound"):
-        if key in updates and (not isinstance(updates[key], str) or not updates[key].strip()):
-            raise ValueError(f"{key} must be a nonempty string")
-    if "media_player" in updates and updates["media_player"] is not None and (
-        not isinstance(updates["media_player"], str) or not updates["media_player"].startswith("media_player.")
-    ):
-        raise ValueError("media_player must be a media_player entity ID or null")
+    if "name" in updates and (not isinstance(updates["name"], str) or not updates["name"].strip()):
+        raise ValueError("name must be a nonempty string")
     if "days" in updates:
         days = updates["days"]
         if not isinstance(days, list) or any(type(day) is not int or not 0 <= day <= 6 for day in days):

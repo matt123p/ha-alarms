@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Remove alarm color, sound and speaker preference fields; alarms carry a name, time, days and snooze duration only. Stored alarms drop the removed fields on load.
+- Show only ESPHome devices in the alarm editor's satellite selector, with a searchable lookahead combo.
+- Add integration brand icons and logos for Home Assistant and the HACS marketplace.
+
 ## 1.0.4 - 2026-10-25
 
 - Store alarms per satellite device instead of controlling room alarms centrally.

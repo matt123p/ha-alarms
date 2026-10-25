@@ -56,7 +56,7 @@ mode: queued
 max: 50
 ```
 
-The firmware action must parse, cache and execute the queue as above; simply adding the action name does not implement an alarm player. It can use the sound, color, snooze duration and optional `media_player` preference from each occurrence. HA no longer calls `media_player.play_media` automatically.
+The firmware action must parse, cache and execute the queue as above; simply adding the action name does not implement an alarm player. It can use the name, snooze duration and repeat days from each occurrence. HA no longer calls `media_player.play_media` automatically.
 
 For reconnect synchronization call `alarms.sync` with `device_id`. For feedback call `alarms.report` with `device_id`, `alarm_id`, `status`, and optional `duration`. These HA actions let ESPHome use `homeassistant.action` without opening a WebSocket. Enable device permission to perform Home Assistant actions as described in the ESPHome native API documentation. MQTT or other transports can bridge the same events without changing alarm storage.
 
@@ -88,7 +88,7 @@ Existing alarms retain their IDs, labels, schedules and preferences. They appear
 | `snooze` | `alarm_id`, optional `duration` | Snooze a reported ringing alarm for 1–60 minutes. |
 | `dismiss`, `stop` | `alarm_id` | Dismiss a reported ringing or snoozed alarm. |
 
-`fields` supports `name`, `time` (local HH:MM[:SS]), `days` (integer array, Monday=0), `color`, `sound`, `snooze_duration` (1–60), and `media_player` (entity ID or null). No command can change device ownership or operate without an explicit alarm target, except list/sync/create. All target IDs are checked against the supplied device. The endpoint is for trusted HA clients: `device_id` scopes operations but is not an authentication credential.
+`fields` supports `name`, `time` (local HH:MM[:SS]), `days` (integer array, Monday=0), and `snooze_duration` (1–60). No command can change device ownership or operate without an explicit alarm target, except list/sync/create. All target IDs are checked against the supplied device. The endpoint is for trusted HA clients: `device_id` scopes operations but is not an authentication credential.
 
 Example create command from ESPHome:
 

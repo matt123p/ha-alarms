@@ -131,16 +131,14 @@ class SatelliteTests(IsolatedAsyncioTestCase):
         alarm_id = await self.create(days=[0, 1, 2, 3, 4])
         await self.coordinator.async_update_alarm(
             alarm_id, name="School", time_val=datetime.time(7, 30),
-            color="#123456", sound="chime.wav", snooze_duration=10,
-            media_player="media_player.bedside", days=[5, 6],
+            snooze_duration=10, days=[5, 6],
         )
         self.store.async_load.return_value = self.coordinator.serialize_alarms()
         restored = AlarmsCoordinator(self.hass, "test")
         await restored.async_setup()
         alarm = restored.alarms[alarm_id]
         self.assertEqual((alarm["name"], alarm["time"], alarm["days"]), ("School", datetime.time(7, 30), [5, 6]))
-        self.assertEqual((alarm["sound"], alarm["color"], alarm["snooze_duration"], alarm["media_player"]),
-                         ("chime.wav", "#123456", 10, "media_player.bedside"))
+        self.assertEqual(alarm["snooze_duration"], 10)
         self.assertEqual(alarm["device_id"], "satellite-a")
 
     async def test_voice_snooze_isolated_and_no_context_has_no_effect(self):
@@ -213,7 +211,7 @@ class SatelliteTests(IsolatedAsyncioTestCase):
                 "action": action, "alarm_id": alarm_id})
             self.assertTrue(result["success"], result)
         result = await async_dispatch_command(self.coordinator, "satellite-a", {
-            "action": "update", "alarm_id": alarm_id, "fields": {"time": "08:15", "sound": "chime.wav"}})
+            "action": "update", "alarm_id": alarm_id, "fields": {"time": "08:15", "snooze_duration": 12}})
         self.assertTrue(result["success"])
         self.assertEqual(self.coordinator.alarms[alarm_id]["time"], datetime.time(8, 15))
         result = await async_dispatch_command(self.coordinator, "satellite-a", {
@@ -271,6 +269,44 @@ class SatelliteTests(IsolatedAsyncioTestCase):
             "action": "dismiss", "alarm_id": alarm_id})
         self.assertTrue(result["success"])
         self.assertFalse(self.coordinator.alarms[alarm_id]["enabled"])
+
+    async def test_removed_config_fields_are_stripped_from_storage_and_events(self):
+        alarm_id = await self.create()
+        # Simulate an old storage blob that still carries the removed fields
+        stored = self.coordinator.serialize_alarms()
+        stored[alarm_id].update({"color": "#123456", "sound": "chime.wav",
+                                 "media_player": "media_player.bedside"})
+        self.store.async_load.return_value = stored
+        restored = AlarmsCoordinator(self.hass, "test")
+        await restored.async_setup()
+        alarm = restored.alarms[alarm_id]
+        for legacy in ("color", "sound", "media_player"):
+            self.assertNotIn(legacy, alarm)
+        # New saves never write the removed keys back
+        await restored.async_save()
+        saved = self.store.async_save.call_args.args[0][alarm_id]
+        for legacy in ("color", "sound", "media_player"):
+            self.assertNotIn(legacy, saved)
+        self.assertEqual(saved["name"], "Wake up")
+
+    async def test_triggered_event_payload_has_no_media_fields(self):
+        alarm_id = await self.create()
+        await self.coordinator.async_trigger_alarm(alarm_id)
+        payload = next(call.args[1] for call in self.hass.bus.async_fire.call_args_list
+                       if call.args[0] == "alarms_triggered")
+        for legacy in ("color", "sound", "media_player", "entity_id"):
+            self.assertNotIn(legacy, payload)
+        self.assertEqual(payload["device_id"], "satellite-a")
+
+    async def test_device_ui_rejects_removed_config_fields(self):
+        from custom_components.alarms.satellite import async_dispatch_command
+        alarm_id = await self.create()
+        for field, value in (("color", "#123456"), ("sound", "chime.wav"),
+                             ("media_player", "media_player.bedside")):
+            result = await async_dispatch_command(self.coordinator, "satellite-a", {
+                "action": "update", "alarm_id": alarm_id, "fields": {field: value}})
+            self.assertFalse(result["success"], field)
+        self.assertNotIn("color", self.coordinator.alarms[alarm_id])
 
     async def test_invalid_device_ui_update_does_not_partially_mutate(self):
         from custom_components.alarms.satellite import async_dispatch_command

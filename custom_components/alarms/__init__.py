@@ -161,7 +161,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Forward platform setups
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    # Register static route to serve UI and sounds
+    # Register static route to serve the UI
     static_dir = os.path.join(os.path.dirname(__file__), "frontend")
     await hass.http.async_register_static_paths([
         StaticPathConfig("/alarms_static", static_dir, True)
@@ -193,20 +193,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         except ValueError as err:
             raise vol.Invalid(f"Invalid time format '{time_str}'. Expected HH:MM or HH:MM:SS") from err
 
-        color = call.data.get("color", "#3498db")
-        sound = call.data.get("sound", "digital.wav")
         days = call.data.get("days", [])
         snooze_duration = call.data.get("snooze_duration", 5)
-        media_player = call.data.get("media_player")
 
         await coordinator.async_create_alarm(
             name=name,
             time_val=time_val,
-            color=color,
-            sound=sound,
             days=days,
             snooze_duration=snooze_duration,
-            media_player=media_player,
             device_id=call.data.get("device_id"),
         )
 
@@ -249,16 +243,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             updates["name"] = call.data["name"]
         if "time" in call.data:
             updates["time_val"] = time_val
-        if "color" in call.data:
-            updates["color"] = call.data["color"]
-        if "sound" in call.data:
-            updates["sound"] = call.data["sound"]
         if "days" in call.data:
             updates["days"] = call.data["days"]
         if "snooze_duration" in call.data:
             updates["snooze_duration"] = call.data["snooze_duration"]
-        if "media_player" in call.data:
-            updates["media_player"] = call.data["media_player"]
 
         await coordinator.async_update_alarm(
             alarm_id=alarm_id,
@@ -302,11 +290,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             {
                 vol.Required("name"): cv.string,
                 vol.Required("time"): cv.string,
-                vol.Optional("color"): cv.string,
-                vol.Optional("sound"): cv.string,
                 vol.Optional("days"): validate_days,
                 vol.Optional("snooze_duration"): vol.Coerce(int),
-                vol.Optional("media_player"): cv.entity_id,
                 vol.Optional("device_id"): cv.string,
             }
         ),
@@ -334,11 +319,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 vol.Optional("entity_id"): cv.entity_id,
                 vol.Optional("name"): cv.string,
                 vol.Optional("time"): cv.string,
-                vol.Optional("color"): cv.string,
-                vol.Optional("sound"): cv.string,
                 vol.Optional("days"): validate_days,
                 vol.Optional("snooze_duration"): vol.Coerce(int),
-                vol.Optional("media_player"): vol.Any(None, cv.entity_id),
                 vol.Optional("device_id"): cv.string,
             }
         ),
@@ -461,11 +443,8 @@ def ws_list_alarms(hass: HomeAssistant, connection: websocket_api.ActiveConnecti
         vol.Required("type"): "alarms/create",
         vol.Required("name"): cv.string,
         vol.Required("time"): cv.string,
-        vol.Optional("color", default="#3498db"): cv.string,
-        vol.Optional("sound", default="digital.wav"): cv.string,
         vol.Optional("days", default=[]): validate_days,
         vol.Optional("snooze_duration", default=5): vol.Coerce(int),
-        vol.Optional("media_player"): vol.Any(None, cv.entity_id),
         vol.Optional("device_id"): cv.string,
     }
 )
@@ -486,11 +465,8 @@ async def ws_create_alarm(hass: HomeAssistant, connection: websocket_api.ActiveC
         alarm_id = await coordinator.async_create_alarm(
             name=msg["name"],
             time_val=time_val,
-            color=msg["color"],
-            sound=msg["sound"],
             days=msg["days"],
             snooze_duration=msg["snooze_duration"],
-            media_player=msg.get("media_player"),
             device_id=msg.get("device_id"),
         )
     except ValueError as err:
@@ -505,11 +481,8 @@ async def ws_create_alarm(hass: HomeAssistant, connection: websocket_api.ActiveC
         vol.Required("alarm_id"): cv.string,
         vol.Optional("name"): cv.string,
         vol.Optional("time"): cv.string,
-        vol.Optional("color"): cv.string,
-        vol.Optional("sound"): cv.string,
         vol.Optional("days"): validate_days,
         vol.Optional("snooze_duration"): vol.Coerce(int),
-        vol.Optional("media_player"): vol.Any(None, cv.entity_id),
         vol.Optional("device_id"): cv.string,
     }
 )
@@ -536,16 +509,10 @@ async def ws_update_alarm(hass: HomeAssistant, connection: websocket_api.ActiveC
         updates["name"] = msg["name"]
     if "time" in msg:
         updates["time_val"] = time_val
-    if "color" in msg:
-        updates["color"] = msg["color"]
-    if "sound" in msg:
-        updates["sound"] = msg["sound"]
     if "days" in msg:
         updates["days"] = msg["days"]
     if "snooze_duration" in msg:
         updates["snooze_duration"] = msg["snooze_duration"]
-    if "media_player" in msg:
-        updates["media_player"] = msg["media_player"]
 
     try:
         await coordinator.async_update_alarm(

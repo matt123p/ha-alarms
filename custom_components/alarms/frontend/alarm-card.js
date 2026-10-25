@@ -8,7 +8,6 @@ class AlarmsPanelCard extends HTMLElement {
     super();
     this.attachShadow({ mode: "open" });
     this._alarms = {};
-    this._mediaPlayers = [];
     this._devices = [];
     this._showModal = false;
     this._editingId = null;
@@ -17,11 +16,8 @@ class AlarmsPanelCard extends HTMLElement {
     this._formState = {
       name: "",
       time: "07:00",
-      color: "#3498db",
-      sound: "digital.wav",
       days: [],
       snooze_duration: 9,
-      media_player: "",
       device_id: this._selectedDevice && this._selectedDevice !== "unassigned" ? this._selectedDevice : "",
     };
   }
@@ -29,17 +25,6 @@ class AlarmsPanelCard extends HTMLElement {
   // Set HASS object (Home Assistant context)
   set hass(hass) {
     this._hass = hass;
-
-    // Extract media players
-    const mps = Object.keys(hass.states)
-      .filter((eid) => eid.startsWith("media_player."))
-      .map((eid) => ({
-        entity_id: eid,
-        name: hass.states[eid].attributes.friendly_name || eid,
-      }));
-
-    const mpsChanged = JSON.stringify(mps) !== JSON.stringify(this._mediaPlayers);
-    this._mediaPlayers = mps;
 
     // Sync alarms from the master sensor if available
     let alarmsChanged = false;
@@ -55,10 +40,7 @@ class AlarmsPanelCard extends HTMLElement {
           enabled: a.enabled,
           status: a.status,
           days: a.days,
-          color: a.color,
-          sound: a.sound,
           snooze_duration: a.snooze_duration,
-          media_player: a.media_player,
           device_id: a.device_id,
           next_trigger: a.next_trigger,
           snoozed_until: a.snoozed_until,
@@ -75,9 +57,9 @@ class AlarmsPanelCard extends HTMLElement {
     // Check if ringing alarms need browser audio playback
     // Satellite devices own playback.
 
-    // Render if first time, media players changed, or alarms changed,
-    // and the modal is not currently open to avoid disrupting user input.
-    if ((!this._hasRendered || mpsChanged || alarmsChanged) && !this._showModal) {
+    // Render on first run or alarm changes; skip while the modal is open
+    // to avoid disrupting user input.
+    if ((!this._hasRendered || alarmsChanged) && !this._showModal) {
       this._hasRendered = true;
       this.render();
     }
@@ -115,7 +97,6 @@ class AlarmsPanelCard extends HTMLElement {
   disconnectedCallback() {
     if (this._wsUnsubscribe) this._wsUnsubscribe();
     if (this._clockInterval) clearInterval(this._clockInterval);
-    if (this._previewAudio) this._previewAudio.pause();
   }
 
   // WebSocket Connection
@@ -257,11 +238,8 @@ class AlarmsPanelCard extends HTMLElement {
     this._formState = {
       name: "",
       time: "07:00",
-      color: "#3498db",
-      sound: "digital.wav",
       days: [],
       snooze_duration: 5,
-      media_player: "",
       device_id: this._selectedDevice && this._selectedDevice !== "unassigned" ? this._selectedDevice : "",
     };
     this._showModal = true;
@@ -273,11 +251,8 @@ class AlarmsPanelCard extends HTMLElement {
     this._formState = {
       name: alarm.name,
       time: alarm.time.substring(0, 5), // HH:MM
-      color: alarm.color,
-      sound: alarm.sound,
       days: [...alarm.days],
       snooze_duration: alarm.snooze_duration,
-      media_player: alarm.media_player || "",
       device_id: alarm.device_id || "",
     };
     this._showModal = true;
@@ -285,7 +260,6 @@ class AlarmsPanelCard extends HTMLElement {
   }
 
   _closeModal() {
-    if (this._previewAudio) { this._previewAudio.pause(); this._previewAudio = null; }
     this._showModal = false;
     this.render();
   }
@@ -301,45 +275,15 @@ class AlarmsPanelCard extends HTMLElement {
     this.render();
   }
 
-  _previewSound() {
-    const btn = this.shadowRoot.querySelector(".preview-btn");
-    const sound = this._formState.sound;
-
-    if (this._previewAudio) {
-      this._previewAudio.pause();
-      this._previewAudio = null;
-      btn.textContent = "Preview";
-      return;
-    }
-
-    const soundUrl = `/alarms_static/sounds/${sound}`;
-    this._previewAudio = new Audio(soundUrl);
-    this._previewAudio.play().catch(e => console.warn(e));
-    btn.textContent = "Stop";
-
-    this._previewAudio.onended = () => {
-      this._previewAudio = null;
-      btn.textContent = "Preview";
-    };
-  }
-
   async _saveAlarm(e) {
     e.preventDefault();
     const shadow = this.shadowRoot;
 
     const name = shadow.getElementById("name").value.trim() || "Alarm";
     const time = shadow.getElementById("time").value;
-    const color = this._safeColor(this._formState.color, "#3498db");
-    const sound = shadow.getElementById("sound").value;
     const snooze_duration = parseInt(shadow.getElementById("snooze_duration").value, 10);
-    const media_player = shadow.getElementById("media_player").value || null;
-    const device_id = shadow.getElementById("device_id").value || null;
+    const device_id = this._formState.device_id || null;
     const days = this._formState.days;
-
-    if (this._previewAudio) {
-      this._previewAudio.pause();
-      this._previewAudio = null;
-    }
 
     try {
       if (this._editingId) {
@@ -349,10 +293,7 @@ class AlarmsPanelCard extends HTMLElement {
           alarm_id: this._editingId,
           name,
           time: time + ":00",
-          color,
-          sound,
           snooze_duration,
-          media_player,
           device_id,
           days,
         });
@@ -362,10 +303,7 @@ class AlarmsPanelCard extends HTMLElement {
           type: "alarms/create",
           name,
           time: time + ":00",
-          color,
-          sound,
           snooze_duration,
-          media_player,
           device_id,
           days,
         });
@@ -385,10 +323,6 @@ class AlarmsPanelCard extends HTMLElement {
       '"': "&quot;",
       "'": "&#39;",
     })[char]);
-  }
-
-  _safeColor(value, fallback = "#e2b46c") {
-    return /^#[0-9a-fA-F]{6}$/.test(value || "") ? value : fallback;
   }
 
   _formatNextTrigger(value) {
@@ -446,25 +380,7 @@ class AlarmsPanelCard extends HTMLElement {
     const nextAlarmName = nextAlarm ? this._escapeHtml(nextAlarm.name || "Alarm") : "No upcoming alarm";
     const nextAlarmTime = nextAlarm ? this._formatNextTrigger(nextAlarm.next_trigger) : "Enable or create an alarm";
 
-    const colors = [
-      "#3498db", // Blue
-      "#2ecc71", // Green
-      "#e67e22", // Orange
-      "#9b59b6", // Purple
-      "#e74c3c", // Red
-      "#f1c40f", // Yellow
-      "#e84393", // Pink
-    ];
-
-    const sounds = [
-      { file: "digital.wav", name: "Digital Beep" },
-      { file: "chime.wav", name: "Soft Chime" },
-      { file: "soothing.wav", name: "Calm Wave" },
-      { file: "buzzer.wav", name: "Retro Buzzer" },
-      { file: "silent.wav", name: "Silent / None (Integration Trigger)" },
-    ];
-
-    const areas = Object.values(this._hass.devices || this._devices || {}).filter(d => !(d.identifiers || []).some(i => i[0] === "alarms")).map(d => ({device_id: d.id, name: d.name_by_user || d.name || d.id}));
+    const devices = this._satelliteDevices();
 
     const ringingAlarm = alarmsList.find(a => a.status === "ringing");
 
@@ -1191,34 +1107,49 @@ class AlarmsPanelCard extends HTMLElement {
           color: #2d3748;
         }
 
-        .sound-row {
-          display: flex;
-          gap: 10px;
-          align-items: center;
-          width: 100%;
-          min-width: 0;
+        /* Searchable device combo */
+        .combo {
+          position: relative;
         }
 
-        .sound-row .select-input {
-          min-width: 0;
-        }
-
-        .preview-btn {
-          background: var(--secondary-background-color, #f7fafc);
-          color: var(--primary-text-color, #2d3748);
+        .combo-list {
+          position: absolute;
+          top: calc(100% + 4px);
+          left: 0;
+          right: 0;
+          z-index: 30;
+          max-height: 240px;
+          overflow-y: auto;
+          background: var(--card-background-color, #ffffff);
           border: 1px solid var(--divider-color, #e2e8f0);
           border-radius: 10px;
-          padding: 0 14px;
-          cursor: pointer;
-          font-size: 14px;
-          font-weight: 600;
-          transition: 0.2s;
-          white-space: nowrap;
-          min-height: 44px;
+          box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+          padding: 4px;
         }
 
-        .preview-btn:hover {
-          background: #edf2f7;
+        .combo-option {
+          display: block;
+          width: 100%;
+          text-align: left;
+          background: transparent;
+          border: none;
+          border-radius: 8px;
+          color: var(--primary-text-color, #2d3748);
+          cursor: pointer;
+          font: inherit;
+          font-size: 15px;
+          padding: 10px 12px;
+        }
+
+        .combo-option:hover,
+        .combo-option[aria-selected="true"] {
+          background: var(--secondary-background-color, #edf2f7);
+        }
+
+        .combo-empty {
+          color: var(--secondary-text-color, #718096);
+          font-size: 14px;
+          padding: 10px 12px;
         }
 
         /* Custom Day Selector in Form */
@@ -1251,36 +1182,10 @@ class AlarmsPanelCard extends HTMLElement {
         }
 
         .day-select-btn.active {
-          background: var(--form-color, #2b7a94);
+          background: var(--primary-color, #2b7a94);
           color: white;
-          border-color: var(--form-color, #2b7a94);
+          border-color: var(--primary-color, #2b7a94);
           box-shadow: none;
-        }
-
-        /* Color Selection Swatches */
-        .color-swatches {
-          display: flex;
-          gap: 10px;
-          flex-wrap: wrap;
-          margin-top: 4px;
-        }
-
-        .color-swatch {
-          width: 32px;
-          height: 32px;
-          border-radius: 50%;
-          cursor: pointer;
-          transition: transform 0.2s;
-          border: 2px solid transparent;
-        }
-
-        .color-swatch:hover {
-          transform: scale(1.15);
-        }
-
-        .color-swatch.active {
-          border-color: #2d3748;
-          transform: scale(1.1);
         }
 
         .modal-footer {
@@ -1308,7 +1213,7 @@ class AlarmsPanelCard extends HTMLElement {
         }
 
         .btn-save {
-          background: var(--form-color, #2b7a94);
+          background: var(--primary-color, #2b7a94);
           color: white;
           border: none;
           padding: 12px 24px;
@@ -1470,11 +1375,6 @@ class AlarmsPanelCard extends HTMLElement {
             grid-column: auto;
           }
 
-          .sound-row {
-            flex-direction: column;
-            align-items: stretch;
-          }
-
           .modal-footer {
             justify-content: stretch;
           }
@@ -1530,7 +1430,7 @@ class AlarmsPanelCard extends HTMLElement {
 
         <nav class="device-tabs" aria-label="Filter by satellite">
           <button data-device="" class="${!this._selectedDevice ? 'selected' : ''}">All devices</button>
-          ${[...new Set(Object.values(this._alarms).map(a => a.device_id || "unassigned"))].map(id => `<button data-device="${this._escapeHtml(id)}" class="${this._selectedDevice === id ? 'selected' : ''}">${this._escapeHtml(areas.find(a => a.device_id === id)?.name || (id === 'unassigned' ? 'Needs a device' : id))}</button>`).join('')}
+          ${[...new Set(Object.values(this._alarms).map(a => a.device_id || "unassigned"))].map(id => `<button data-device="${this._escapeHtml(id)}" class="${this._selectedDevice === id ? 'selected' : ''}">${this._escapeHtml(devices.find(a => a.device_id === id)?.name || (id === 'unassigned' ? 'Needs a device' : id))}</button>`).join('')}
         </nav>
         ${isPanelPage
         ? `
@@ -1577,14 +1477,13 @@ class AlarmsPanelCard extends HTMLElement {
 
             let statusText = alarmStatus;
             if (alarmStatus === "silenced") statusText = "Skipped Next";
-            const alarmColor = this._safeColor(alarm.color);
-            const alarmArea = alarm.device_id ? (areas.find(a => a.device_id === alarm.device_id)?.name || alarm.device_id) : "Needs a device";
+            const alarmArea = alarm.device_id ? (devices.find(a => a.device_id === alarm.device_id)?.name || alarm.device_id) : "Needs a device";
             const alarmId = this._escapeHtml(alarm.id);
             const scheduleText = this._formatSchedule(alarm.days);
             const nextText = alarm.enabled ? this._formatNextTrigger(alarm.next_trigger) : "Disabled";
 
             return `
-              <div class="alarm-row status-${alarmStatus}" style="--alarm-color: ${alarmColor}">
+              <div class="alarm-row status-${alarmStatus}" style="--alarm-color: var(--primary-color, #2b7a94)">
                 <div class="time-display">${this._escapeHtml(String(alarm.time || "").substring(0, 5))}</div>
                 
                 <div class="alarm-details">
@@ -1605,7 +1504,7 @@ class AlarmsPanelCard extends HTMLElement {
                     ${daysShort
                   .map((day, idx) => {
                     const active = alarm.days.includes(idx);
-                    return `<div class="day-dot ${active ? "active" : ""}" style="${active ? `background: ${alarmColor};` : ""}">${day}</div>`;
+                    return `<div class="day-dot ${active ? "active" : ""}" style="${active ? "background: var(--primary-color, #2b7a94);" : ""}">${day}</div>`;
                   })
                   .join("")}
                   </div>
@@ -1652,7 +1551,7 @@ class AlarmsPanelCard extends HTMLElement {
 
       <!-- Add/Edit Modal -->
       <div class="modal-overlay ${this._showModal ? "open" : ""}">
-          <div class="modal-content" style="--form-color: ${this._safeColor(this._formState.color, "#3498db")}">
+          <div class="modal-content">
             <div class="modal-header">
               <h3>${this._editingId ? "Edit Alarm" : "Add Alarm"}</h3>
               <button class="close-modal-btn" aria-label="Close">&times;</button>
@@ -1692,63 +1591,11 @@ class AlarmsPanelCard extends HTMLElement {
                 </div>
               </div>
 
-              <div class="form-group full-width">
-                <label>Theme Color</label>
-                <div class="color-swatches">
-                  ${colors
-        .map((c) => {
-          const active = this._formState.color === c;
-          return `
-                      <div class="color-swatch ${active ? "active" : ""
-            }" style="background: ${c}; --swatch-color: ${c}" data-color="${c}"></div>
-                    `;
-        })
-        .join("")}
-                </div>
-              </div>
-
-              <div class="form-group full-width">
-                <label>Alarm Sound</label>
-                <div class="sound-row">
-                  <select id="sound" class="select-input">
-                    ${sounds
-                      .map((s) => `
-                        <option value="${this._escapeHtml(s.file)}" ${this._formState.sound === s.file ? "selected" : ""}>
-                          ${this._escapeHtml(s.name)}
-                        </option>
-                      `)
-                      .join("")}
-                  </select>
-                  <button type="button" class="preview-btn">Preview</button>
-                </div>
-              </div>
-
-              <div class="form-group">
-                <label for="media_player">Speaker preference (sent to satellite)</label>
-                <select id="media_player" class="select-input">
-                  <option value="" ${this._formState.media_player === "" ? "selected" : ""}>Use satellite speaker</option>
-                  ${this._mediaPlayers
-                    .map((mp) => `
-                      <option value="${this._escapeHtml(mp.entity_id)}" ${this._formState.media_player === mp.entity_id ? "selected" : ""}>
-                        ${this._escapeHtml(mp.name)}
-                      </option>
-                    `)
-                    .join("")}
-                </select>
-              </div>
-
-              <div class="form-group">
-                <label for="device_id">Satellite device</label>
-                <select id="device_id" class="select-input" required>
-                  <option value="" ${this._formState.device_id === "" ? "selected" : ""}>Select a satellite…</option>
-                  ${areas
-                    .map((area) => `
-                      <option value="${this._escapeHtml(area.device_id)}" ${this._formState.device_id === area.device_id ? "selected" : ""}>
-                        ${this._escapeHtml(area.name)}
-                      </option>
-                    `)
-                    .join("")}
-                </select>
+              <div class="form-group full-width combo" data-combo>
+                <label for="device_id">Satellite device (ESPHome)</label>
+                <input type="text" id="device_id" class="input-text" required autocomplete="off"
+                       placeholder="Search satellites…" value="${this._escapeHtml(this._deviceLabel(this._formState.device_id, devices))}">
+                <div class="combo-list" hidden></div>
               </div>
 
               <div class="modal-footer">
@@ -1878,24 +1725,6 @@ class AlarmsPanelCard extends HTMLElement {
       });
     });
 
-    // Color swatches in Modal
-    shadow.querySelectorAll(".color-swatch").forEach((swatch) => {
-      swatch.addEventListener("click", (e) => {
-        e.stopPropagation();
-        this._formState.color = swatch.getAttribute("data-color");
-        this.render();
-      });
-    });
-
-    // Sound preview button in Modal
-    const previewBtn = shadow.querySelector(".preview-btn");
-    if (previewBtn) {
-      previewBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        this._previewSound();
-      });
-    }
-
     // Bind form inputs to _formState to survive renders
     const nameInput = shadow.getElementById("name");
     if (nameInput) {
@@ -1920,32 +1749,81 @@ class AlarmsPanelCard extends HTMLElement {
       });
     }
 
-    const soundSelect = shadow.getElementById("sound");
-    if (soundSelect) {
-      soundSelect.addEventListener("change", (e) => {
-        this._formState.sound = e.target.value;
-      });
-    }
-
-    const mediaPlayerSelect = shadow.getElementById("media_player");
-    if (mediaPlayerSelect) {
-      mediaPlayerSelect.addEventListener("change", (e) => {
-        this._formState.media_player = e.target.value || "";
-      });
-    }
-
-    const areaSelect = shadow.getElementById("device_id");
-    if (areaSelect) {
-      areaSelect.addEventListener("change", (e) => {
-        this._formState.device_id = e.target.value || "";
-      });
-    }
+    this._setupDeviceCombo(this._satelliteDevices());
 
     // Form submit
     const alarmForm = shadow.getElementById("alarm-form");
     if (alarmForm) {
       alarmForm.addEventListener("submit", (e) => this._saveAlarm(e));
     }
+  }
+
+  // ESPHome satellites usable as alarm owners
+  _satelliteDevices() {
+    return Object.values(this._hass.devices || this._devices || {})
+      .filter((d) => (d.identifiers || []).some((i) => i[0] === "esphome"))
+      .map((d) => ({ device_id: d.id, name: d.name_by_user || d.name || d.id }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  // Searchable lookahead combo for the satellite device picker
+  _deviceLabel(deviceId, devices) {
+    if (!deviceId) return "";
+    const match = devices.find((d) => d.device_id === deviceId);
+    return match ? match.name : deviceId;
+  }
+
+  _setupDeviceCombo(devices) {
+    const shadow = this.shadowRoot;
+    const combo = shadow.querySelector("[data-combo]");
+    const input = shadow.getElementById("device_id");
+    if (!combo || !input) return;
+
+    const list = combo.querySelector(".combo-list");
+    if (!list) return;
+
+    const closeList = () => {
+      list.hidden = true;
+    };
+
+    const renderList = (filter) => {
+      const query = (filter || "").trim().toLowerCase();
+      const matches = devices.filter((d) => !query || d.name.toLowerCase().includes(query));
+      list.innerHTML = matches.length
+        ? matches.map((d) => `
+            <button type="button" class="combo-option" data-value="${this._escapeHtml(d.device_id)}" ${d.device_id === this._formState.device_id ? 'aria-selected="true"' : ""}>
+              ${this._escapeHtml(d.name)}
+            </button>
+          `).join("")
+        : `<div class="combo-empty">No matching satellites</div>`;
+      list.hidden = false;
+    };
+
+    const select = (device) => {
+      this._formState.device_id = device.device_id;
+      input.value = device.name;
+      list.hidden = true;
+    };
+
+    input.addEventListener("focus", () => renderList(input.value));
+    input.addEventListener("input", () => {
+      const exact = devices.find((d) => d.name === input.value);
+      if (!exact) this._formState.device_id = "";
+      renderList(input.value);
+    });
+    input.addEventListener("blur", () => {
+      // Wait for a possible option mousedown before collapsing
+      setTimeout(closeList, 150);
+    });
+
+    list.addEventListener("mousedown", (e) => {
+      const option = e.target.closest(".combo-option");
+      if (option) {
+        e.preventDefault();
+        const device = devices.find((d) => d.device_id === option.getAttribute("data-value"));
+        if (device) select(device);
+      }
+    });
   }
 }
 

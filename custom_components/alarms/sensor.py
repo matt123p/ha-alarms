@@ -124,13 +124,10 @@ class AlarmStatusSensor(AlarmBaseSensor):
             return None
         return {
             "alarm_id": self.alarm_id,
-            "color": self.alarm.get("color"),
-            "sound": self.alarm.get("sound"),
             "days": self.alarm.get("days"),
             "snooze_duration": self.alarm.get("snooze_duration"),
             "snoozed_until": self.alarm["snoozed_until"].isoformat() if self.alarm.get("snoozed_until") else None,
             "silenced": self.alarm.get("silenced"),
-            "media_player": self.alarm.get("media_player"),
             "device_id": self.alarm.get("device_id"),
             "area_id": self.alarm.get("area_id"),
         }
@@ -208,10 +205,7 @@ class AlarmsSystemSensor(SensorEntity):
                 "enabled": alarm["enabled"],
                 "status": alarm["status"],
                 "days": alarm["days"],
-                "color": alarm["color"],
-                "sound": alarm["sound"],
                 "snooze_duration": alarm["snooze_duration"],
-                "media_player": alarm["media_player"],
                 "next_trigger": alarm["next_trigger"].isoformat() if alarm["next_trigger"] else None,
                 "snoozed_until": alarm["snoozed_until"].isoformat() if alarm["snoozed_until"] else None,
                 "silenced": alarm["silenced"],
@@ -225,7 +219,6 @@ class AlarmsSystemSensor(SensorEntity):
         next_alarm_id = None
         next_alarm_name = None
         next_alarm_trigger = None
-        next_alarm_color = None
         next_alarm_area_id = None
         next_alarm_area_name = None
 
@@ -233,7 +226,6 @@ class AlarmsSystemSensor(SensorEntity):
             next_alarm_id = next_alarm["id"]
             next_alarm_name = next_alarm["name"]
             next_alarm_time = next_alarm["time"].strftime("%H:%M:%S")
-            next_alarm_color = next_alarm.get("color")
             next_alarm_area_id = next_alarm.get("area_id")
             next_alarm_area_name = area_names.get(next_alarm_area_id, next_alarm_area_id) if next_alarm_area_id else None
             target = next_alarm["snoozed_until"] or next_alarm["next_trigger"]
@@ -257,7 +249,6 @@ class AlarmsSystemSensor(SensorEntity):
                     "alarm_id": alarm["id"],
                     "name": alarm["name"],
                     "time": alarm["time"].strftime("%H:%M:%S"),
-                    "color": alarm.get("color"),
                     "next_trigger": target.isoformat(),
                     "area_name": area_names.get(area, area),
                 }
@@ -277,7 +268,6 @@ class AlarmsSystemSensor(SensorEntity):
             "next_upcoming_alarm_id": next_alarm_id,
             "next_upcoming_alarm_name": next_alarm_name,
             "next_upcoming_alarm_time": next_alarm_time,
-            "next_upcoming_alarm_color": next_alarm_color,
             "next_upcoming_alarm_area_id": next_alarm_area_id,
             "next_upcoming_alarm_area_name": next_alarm_area_name,
             "next_upcoming_alarm_by_area": next_by_area_serialized,
@@ -381,14 +371,13 @@ class AlarmsListSensor(SensorEntity):
             
             name_clean = alarm["name"].replace("|", " ").replace(";", " ")
             enabled_str = "1" if alarm["enabled"] else "0"
-            color_str = alarm.get("color", "#3498db")
             area_id = alarm.get("area_id") or ""
             target = alarm.get("snoozed_until") or alarm.get("next_trigger")
             next_trigger_str = target.isoformat() if target else ""
             
             parts.append(
                 f"{name_clean}|{alarm['time'].strftime('%H:%M')}|{days_str}|{enabled_str}|"
-                f"{alarm['status']}|{color_str}|{enabled_entity_id}|{skip_entity_id}|{alarm_id}|{area_id}|{next_trigger_str}"
+                f"{alarm['status']}|{enabled_entity_id}|{skip_entity_id}|{alarm_id}|{area_id}|{next_trigger_str}"
             )
             
         return {
@@ -457,7 +446,6 @@ class AlarmsNextAlarmSensor(SensorEntity):
                 "alarm_id": next_alarm["id"],
                 "name": next_alarm["name"],
                 "time": next_alarm["time"].strftime("%H:%M:%S"),
-                "color": next_alarm.get("color"),
                 "next_trigger": target.isoformat() if target else None,
                 "area_id": next_alarm.get("area_id"),
                 "area_name": area_names.get(next_alarm.get("area_id"), next_alarm.get("area_id")) if next_alarm.get("area_id") else None,
@@ -481,7 +469,6 @@ class AlarmsNextAlarmSensor(SensorEntity):
                     "alarm_id": alarm["id"],
                     "name": alarm["name"],
                     "time": alarm["time"].strftime("%H:%M:%S"),
-                    "color": alarm.get("color"),
                     "next_trigger": target.isoformat(),
                     "area_name": area_names.get(area, area),
                 }

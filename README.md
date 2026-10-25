@@ -9,7 +9,7 @@ A device-owned alarm store for Home Assistant Voice Assistant satellites, includ
 Home Assistant stores multiple alarms per satellite and calculates its next five occurrences, plus every occurrence in the next two hours. Satellites cache and execute the resulting timestamps locally. Ownership follows the device, independently of its room.
 
 - Device-scoped Assist LLM tools for listing, creating, editing, deleting, enabling, skipping, snoozing and dismissing alarms.
-- One-off and repeating schedules, weekdays/weekends, timezone support, skip-next, snooze, labels, colors, sounds and speaker preferences.
+- One-off and repeating schedules, weekdays/weekends, timezone support, skip-next, snooze and labels.
 - Sidebar panel and Lovelace card with satellite selection, device filters and an unassigned-alarm migration view.
 - Native alarm entities, status sensors, realtime updates and automation events.
 - Generic WebSocket subscription and HA event/action transports for satellite adapters.

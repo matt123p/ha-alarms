@@ -16,28 +16,6 @@ create:
       example: "07:30:00"
       selector:
         text:
-    color:
-      name: Color
-      description: Hex color code representing the theme color of the alarm card.
-      required: false
-      default: "#3498db"
-      example: "#2ecc71"
-      selector:
-        text:
-    sound:
-      name: Sound
-      description: Sound file to play when triggering.
-      required: false
-      default: "digital.wav"
-      example: "chime.wav"
-      selector:
-        select:
-          options:
-            - "digital.wav"
-            - "chime.wav"
-            - "soothing.wav"
-            - "buzzer.wav"
-            - "silent.wav"
     days:
       name: Days
       description: List of days the alarm should repeat (0 = Monday, 6 = Sunday). Leave empty for one-off.
@@ -57,13 +35,6 @@ create:
           min: 1
           max: 60
           unit_of_measurement: minutes
-    media_player:
-      name: Output Speaker
-      description: Optional speaker preference included in the satellite payload.
-      required: false
-      selector:
-        entity:
-          domain: media_player
     device_id:
       name: Satellite device
       description: Home Assistant device that owns and executes this alarm.
@@ -122,25 +93,6 @@ update:
       example: "07:30:00"
       selector:
         text:
-    color:
-      name: Color
-      description: Hex color code representing the theme color of the alarm card.
-      required: false
-      example: "#2ecc71"
-      selector:
-        text:
-    sound:
-      name: Sound
-      description: Sound file to play when triggering.
-      required: false
-      selector:
-        select:
-          options:
-            - "digital.wav"
-            - "chime.wav"
-            - "soothing.wav"
-            - "buzzer.wav"
-            - "silent.wav"
     days:
       name: Days
       description: List of days the alarm should repeat (0 = Monday, 6 = Sunday).
@@ -156,13 +108,6 @@ update:
           min: 1
           max: 60
           unit_of_measurement: minutes
-    media_player:
-      name: Output Speaker
-      description: Optional speaker preference included in the satellite payload.
-      required: false
-      selector:
-        entity:
-          domain: media_player
     device_id:
       name: Satellite device
       description: Home Assistant device that owns and executes this alarm.
