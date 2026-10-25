@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Store alarms per satellite device instead of controlling room alarms centrally.
+- Publish precomputed occurrence queues and remote playback commands over WebSocket and HA events, with sync/report actions for adapters.
+- Scope Assist LLM tools and intents to the requesting satellite; add list and enable/disable/skip controls.
+- Add a device-scoped UI command API with correlated acknowledgements, plus an ESPHome editor package and touchscreen/transport setup instructions.
+- Add satellite filters, explicit device assignment and a cleaner responsive dashboard.
+- Preserve legacy alarms for explicit reassignment; document the adapter contract and ESPHome bridge.
+
 ## 1.0.3 - 2026-09-04
 
 - Prefix Assist LLM tool names with `alarms__`, as required for custom integrations.

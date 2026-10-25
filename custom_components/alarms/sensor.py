@@ -131,6 +131,7 @@ class AlarmStatusSensor(AlarmBaseSensor):
             "snoozed_until": self.alarm["snoozed_until"].isoformat() if self.alarm.get("snoozed_until") else None,
             "silenced": self.alarm.get("silenced"),
             "media_player": self.alarm.get("media_player"),
+            "device_id": self.alarm.get("device_id"),
             "area_id": self.alarm.get("area_id"),
         }
 
@@ -214,6 +215,7 @@ class AlarmsSystemSensor(SensorEntity):
                 "next_trigger": alarm["next_trigger"].isoformat() if alarm["next_trigger"] else None,
                 "snoozed_until": alarm["snoozed_until"].isoformat() if alarm["snoozed_until"] else None,
                 "silenced": alarm["silenced"],
+                "device_id": alarm.get("device_id"),
                 "area_id": alarm.get("area_id"),
                 "area_name": area_names.get(alarm.get("area_id"), alarm.get("area_id")) if alarm.get("area_id") else None,
             })
@@ -268,6 +270,7 @@ class AlarmsSystemSensor(SensorEntity):
 
         return {
             "configured_alarms": alarms_list,
+            "satellite_schedules": {device_id: self.coordinator.satellite_schedule(device_id) for device_id in {a.get("device_id") for a in self.coordinator.alarms.values()} if device_id},
             "total_alarms": len(alarms_list),
             "active_alarms_count": sum(1 for a in alarms_list if a["enabled"]),
             "next_upcoming_alarm": next_alarm_trigger,

@@ -59,17 +59,17 @@ create:
           unit_of_measurement: minutes
     media_player:
       name: Output Speaker
-      description: Optional media player entity to play the alarm sound.
+      description: Optional speaker preference included in the satellite payload.
       required: false
       selector:
         entity:
           domain: media_player
-    area_id:
-      name: Area
-      description: Optional area to associate with the alarm.
-      required: false
+    device_id:
+      name: Satellite device
+      description: Home Assistant device that owns and executes this alarm.
+      required: true
       selector:
-        area:
+        device:
 
 delete:
   name: Delete Alarm
@@ -158,17 +158,17 @@ update:
           unit_of_measurement: minutes
     media_player:
       name: Output Speaker
-      description: Optional media player entity to play the alarm sound.
+      description: Optional speaker preference included in the satellite payload.
       required: false
       selector:
         entity:
           domain: media_player
-    area_id:
-      name: Area
-      description: Optional area to associate with the alarm.
+    device_id:
+      name: Satellite device
+      description: Home Assistant device that owns and executes this alarm.
       required: false
       selector:
-        area:
+        device:
 
 stop:
   name: Stop Alarm
@@ -267,3 +267,61 @@ unskip_next:
       selector:
         entity:
           domain: switch
+
+sync:
+  name: Sync satellite
+  description: Publish the latest calculated schedule to a satellite adapter.
+  fields:
+    device_id:
+      name: Satellite device
+      required: true
+      selector:
+        device:
+
+report:
+  name: Report satellite alarm state
+  description: Update stored playback state from a satellite adapter.
+  fields:
+    device_id:
+      name: Satellite device
+      required: true
+      selector:
+        device:
+    alarm_id:
+      name: Alarm ID
+      required: true
+      selector:
+        text:
+    status:
+      name: Status
+      required: true
+      selector:
+        select:
+          options:
+            - ringing
+            - snoozed
+            - dismissed
+    duration:
+      name: Snooze duration
+      selector:
+        number:
+          min: 1
+          max: 60
+
+satellite_command:
+  name: Satellite UI command
+  description: Execute a device-scoped UI command. Publishes a correlated alarms_command_result event, including validation errors.
+  fields:
+    device_id:
+      name: Satellite device
+      required: true
+      selector:
+        device:
+    command:
+      name: Command JSON
+      description: JSON object with action, request_id, alarm_id and optional fields or duration.
+      required: true
+      example: '{"action":"create","request_id":"screen-1","fields":{"name":"Wake up","time":"07:00","days":[0,1,2,3,4]}}'
+      selector:
+        text:
+          multiline: true

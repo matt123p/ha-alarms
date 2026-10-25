@@ -6,6 +6,8 @@ from homeassistant.helpers import intent
 from homeassistant.helpers.llm import LLM_API_ASSIST, IntentTool, LLMContext, Tool
 
 LLM_INTENTS = (
+    "alarms__list",
+    "alarms__control",
     "alarms__create",
     "alarms__delete",
     "alarms__update",
@@ -19,7 +21,7 @@ def async_get_tools(
     hass: HomeAssistant, llm_context: LLMContext, api_id: str
 ) -> llm.LLMTools | None:
     """Expose alarm intents to Home Assistant's built-in Assist LLM API."""
-    if api_id != LLM_API_ASSIST:
+    if api_id != LLM_API_ASSIST or not llm_context.device_id:
         return None
 
     tools: list[Tool] = [
@@ -33,8 +35,8 @@ def async_get_tools(
     return llm.LLMTools(
         tools=tools,
         prompt=(
-            "Use the Alarms tools for wake-up alarms. If the user does not name "
-            "a room, alarm creation, snooze, and dismiss default to the area of "
-            "the voice satellite that received the request."
+            "Use Alarms tools for alarms on the requesting satellite device only. "
+            "Alarms belong to that device regardless of its room. "
+            "Use alarms__list to inspect its alarms before editing or deleting."
         ),
     )

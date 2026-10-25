@@ -10,9 +10,8 @@ from homeassistant.components import panel_custom, websocket_api
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall, callback
-from homeassistant.helpers import area_registry as ar
-from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import intent
 from homeassistant.helpers.network import get_url
@@ -23,6 +22,7 @@ from .const import (
     STATE_SNOOZED,
 )
 from .coordinator import AlarmsCoordinator
+from .satellite import async_dispatch_command
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -125,37 +125,15 @@ def get_alarm_id_from_entity(hass: HomeAssistant, entity_id: str) -> str | None:
     return None
 
 
-def get_area_id_from_device(hass: HomeAssistant, device_id: str | None) -> str | None:
-    """Resolve the Home Assistant area assigned to an Assist satellite device."""
-    if not device_id:
-        return None
-    device = dr.async_get(hass).async_get(device_id)
-    return device.area_id if device else None
-
-
-def get_intent_area_id(intent_obj: intent.Intent) -> str | None:
-    """Return an explicit intent area or fall back to the requesting device area."""
-    area_slot = intent_obj.slots.get("area")
-    if area_slot and area_slot.get("value"):
-        area_value = str(area_slot["value"]).strip()
-        area_registry = ar.async_get(intent_obj.hass)
-        normalized = area_value.replace("_", " ").lower()
-        for area in area_registry.areas.values():
-            if normalized in (area.id.replace("_", " ").lower(), area.name.lower()):
-                return area.id
-        return area_value
-    return get_area_id_from_device(intent_obj.hass, getattr(intent_obj, "device_id", None))
-
-
-def alarms_for_intent_area(
+def alarms_for_intent_device(
     intent_obj: intent.Intent,
     alarms: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Limit alarms to the requesting satellite's area when one is known."""
-    area_id = get_intent_area_id(intent_obj)
-    if area_id is None:
-        return alarms
-    return [alarm for alarm in alarms if alarm.get("area_id") == area_id]
+    """Limit every voice operation to the requesting satellite device."""
+    device_id = getattr(intent_obj, "device_id", None)
+    if not device_id:
+        return []
+    return [alarm for alarm in alarms if alarm.get("device_id") == device_id]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -166,7 +144,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Clean up orphaned alarm devices from registries (leftovers from previous deleted alarms)
     try:
         if type(hass).__name__ not in ("MagicMock", "Mock"):
-            from homeassistant.helpers import device_registry as dr
             device_registry = dr.async_get(hass)
             devices = dr.async_entries_for_config_entry(device_registry, entry.entry_id)
             for device in devices:
@@ -221,7 +198,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         days = call.data.get("days", [])
         snooze_duration = call.data.get("snooze_duration", 5)
         media_player = call.data.get("media_player")
-        area_id = call.data.get("area_id")
 
         await coordinator.async_create_alarm(
             name=name,
@@ -231,7 +207,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             days=days,
             snooze_duration=snooze_duration,
             media_player=media_player,
-            area_id=area_id,
+            device_id=call.data.get("device_id"),
         )
 
     async def handle_delete_service(call: ServiceCall) -> None:
@@ -241,26 +217,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         if not alarm_id and entity_id:
             alarm_id = get_alarm_id_from_entity(hass, entity_id)
-
-        if not alarm_id and action in ("snooze", "dismiss", "stop"):
-            applicable_states = (
-                (STATE_RINGING,)
-                if action == "snooze"
-                else (STATE_RINGING, STATE_SNOOZED)
-            )
-            matching = [
-                alarm
-                for alarm in coordinator.alarms.values()
-                if alarm["status"] in applicable_states
-            ]
-            for alarm in matching:
-                if action == "snooze":
-                    await coordinator.async_snooze_alarm(
-                        alarm["id"], call.data.get("duration")
-                    )
-                else:
-                    await coordinator.async_stop_alarm(alarm["id"])
-            return
 
         if not alarm_id:
             raise vol.Invalid("Must specify either alarm_id or entity_id")
@@ -287,6 +243,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 raise vol.Invalid(f"Invalid time format '{time_str}'. Expected HH:MM or HH:MM:SS") from err
 
         updates = {}
+        if "device_id" in call.data:
+            updates["device_id"] = call.data["device_id"]
         if "name" in call.data:
             updates["name"] = call.data["name"]
         if "time" in call.data:
@@ -301,8 +259,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             updates["snooze_duration"] = call.data["snooze_duration"]
         if "media_player" in call.data:
             updates["media_player"] = call.data["media_player"]
-        if "area_id" in call.data:
-            updates["area_id"] = call.data["area_id"]
 
         await coordinator.async_update_alarm(
             alarm_id=alarm_id,
@@ -318,6 +274,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if not alarm_id and entity_id:
             alarm_id = get_alarm_id_from_entity(hass, entity_id)
 
+        if not alarm_id and action in ("snooze", "dismiss", "stop"):
+            for alarm in list(coordinator.alarms.values()):
+                if action == "snooze":
+                    await coordinator.async_snooze_alarm(alarm["id"], call.data.get("duration"))
+                else:
+                    await coordinator.async_stop_alarm(alarm["id"])
+            return
         if not alarm_id:
             raise vol.Invalid("Must specify either alarm_id or entity_id")
 
@@ -344,7 +307,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 vol.Optional("days"): validate_days,
                 vol.Optional("snooze_duration"): vol.Coerce(int),
                 vol.Optional("media_player"): cv.entity_id,
-                vol.Optional("area_id"): vol.Any(None, cv.string),
+                vol.Optional("device_id"): cv.string,
             }
         ),
     )
@@ -376,7 +339,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 vol.Optional("days"): validate_days,
                 vol.Optional("snooze_duration"): vol.Coerce(int),
                 vol.Optional("media_player"): vol.Any(None, cv.entity_id),
-                vol.Optional("area_id"): vol.Any(None, cv.string),
+                vol.Optional("device_id"): cv.string,
             }
         ),
     )
@@ -399,6 +362,40 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.services.async_register(DOMAIN, "skip_next", handle_alarm_action, schema=action_schema)
     hass.services.async_register(DOMAIN, "unskip_next", handle_alarm_action, schema=action_schema)
 
+    async def handle_sync(call: ServiceCall) -> None:
+        device_id = call.data["device_id"]
+        coordinator.validate_device(device_id)
+        hass.bus.async_fire("alarms_schedule", coordinator.satellite_schedule(device_id))
+
+    async def handle_report(call: ServiceCall) -> None:
+        alarm = coordinator.alarms.get(call.data["alarm_id"])
+        if not alarm or alarm.get("device_id") != call.data["device_id"]:
+            raise vol.Invalid("Alarm does not belong to this satellite")
+        if call.data["status"] == "ringing":
+            await coordinator.async_trigger_alarm(alarm["id"])
+        elif call.data["status"] == "snoozed":
+            await coordinator.async_snooze_alarm(alarm["id"], call.data.get("duration"))
+        else:
+            await coordinator.async_dismiss_alarm(alarm["id"])
+
+    hass.services.async_register(DOMAIN, "sync", handle_sync, schema=vol.Schema({
+        vol.Required("device_id"): cv.string,
+    }))
+    hass.services.async_register(DOMAIN, "report", handle_report, schema=vol.Schema({
+        vol.Required("device_id"): cv.string,
+        vol.Required("alarm_id"): cv.string,
+        vol.Required("status"): vol.In(["ringing", "snoozed", "dismissed"]),
+        vol.Optional("duration"): vol.All(vol.Coerce(int), vol.Range(min=1, max=60)),
+    }))
+
+    async def handle_satellite_command(call: ServiceCall) -> None:
+        await async_dispatch_command(coordinator, call.data["device_id"], call.data["command"])
+
+    hass.services.async_register(DOMAIN, "satellite_command", handle_satellite_command, schema=vol.Schema({
+        vol.Required("device_id"): cv.string,
+        vol.Required("command"): cv.string,
+    }))
+
     # Register WebSocket commands
     websocket_api.async_register_command(hass, ws_list_alarms)
     websocket_api.async_register_command(hass, ws_create_alarm)
@@ -406,10 +403,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     websocket_api.async_register_command(hass, ws_delete_alarm)
     websocket_api.async_register_command(hass, ws_action_alarm)
     websocket_api.async_register_command(hass, ws_subscribe)
+    websocket_api.async_register_command(hass, ws_satellite_subscribe)
+    websocket_api.async_register_command(hass, ws_satellite_report)
+    websocket_api.async_register_command(hass, ws_satellite_command)
 
     # Register Assist intents
     intent.async_register(hass, AlarmsSnoozeIntentHandler())
     intent.async_register(hass, AlarmsDismissIntentHandler())
+    intent.async_register(hass, AlarmsListIntentHandler())
+    intent.async_register(hass, AlarmsControlIntentHandler())
     intent.async_register(hass, AlarmsCreateIntentHandler())
     intent.async_register(hass, AlarmsDeleteIntentHandler())
     intent.async_register(hass, AlarmsUpdateIntentHandler())
@@ -425,6 +427,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         for timer_cancel in list(coordinator._timers.values()):
             timer_cancel()
         coordinator._timers.clear()
+        if coordinator._refresh_cancel:
+            coordinator._refresh_cancel()
 
     # Unload platforms
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
@@ -462,7 +466,7 @@ def ws_list_alarms(hass: HomeAssistant, connection: websocket_api.ActiveConnecti
         vol.Optional("days", default=[]): validate_days,
         vol.Optional("snooze_duration", default=5): vol.Coerce(int),
         vol.Optional("media_player"): vol.Any(None, cv.entity_id),
-        vol.Optional("area_id"): vol.Any(None, cv.string),
+        vol.Optional("device_id"): cv.string,
     }
 )
 @websocket_api.async_response
@@ -487,10 +491,10 @@ async def ws_create_alarm(hass: HomeAssistant, connection: websocket_api.ActiveC
             days=msg["days"],
             snooze_duration=msg["snooze_duration"],
             media_player=msg.get("media_player"),
-            area_id=msg.get("area_id"),
+            device_id=msg.get("device_id"),
         )
     except ValueError as err:
-        connection.send_error(msg["id"], "invalid_location", str(err))
+        connection.send_error(msg["id"], "invalid_device", str(err))
         return
     connection.send_result(msg["id"], {"alarm_id": alarm_id})
 
@@ -506,7 +510,7 @@ async def ws_create_alarm(hass: HomeAssistant, connection: websocket_api.ActiveC
         vol.Optional("days"): validate_days,
         vol.Optional("snooze_duration"): vol.Coerce(int),
         vol.Optional("media_player"): vol.Any(None, cv.entity_id),
-        vol.Optional("area_id"): vol.Any(None, cv.string),
+        vol.Optional("device_id"): cv.string,
     }
 )
 @websocket_api.async_response
@@ -526,6 +530,8 @@ async def ws_update_alarm(hass: HomeAssistant, connection: websocket_api.ActiveC
             return
 
     updates = {}
+    if "device_id" in msg:
+        updates["device_id"] = msg["device_id"]
     if "name" in msg:
         updates["name"] = msg["name"]
     if "time" in msg:
@@ -540,8 +546,6 @@ async def ws_update_alarm(hass: HomeAssistant, connection: websocket_api.ActiveC
         updates["snooze_duration"] = msg["snooze_duration"]
     if "media_player" in msg:
         updates["media_player"] = msg["media_player"]
-    if "area_id" in msg:
-        updates["area_id"] = msg["area_id"]
 
     try:
         await coordinator.async_update_alarm(
@@ -549,7 +553,7 @@ async def ws_update_alarm(hass: HomeAssistant, connection: websocket_api.ActiveC
             **updates
         )
     except ValueError as err:
-        connection.send_error(msg["id"], "invalid_location", str(err))
+        connection.send_error(msg["id"], "invalid_device", str(err))
         return
     connection.send_result(msg["id"], {"success": True})
 
@@ -575,7 +579,7 @@ async def ws_delete_alarm(hass: HomeAssistant, connection: websocket_api.ActiveC
     {
         vol.Required("type"): "alarms/action",
         vol.Required("alarm_id"): cv.string,
-        vol.Required("action"): vol.In(["snooze", "dismiss", "stop", "skip_next", "unskip_next"]),
+        vol.Required("action"): vol.In(["snooze", "dismiss", "stop", "skip_next", "unskip_next", "enable", "disable"]),
         vol.Optional("snooze_duration"): vol.Coerce(int),
     }
 )
@@ -590,7 +594,9 @@ async def ws_action_alarm(hass: HomeAssistant, connection: websocket_api.ActiveC
     action = msg["action"]
     alarm_id = msg["alarm_id"]
 
-    if action == "snooze":
+    if action in ("enable", "disable"):
+        await coordinator.async_toggle_alarm(alarm_id, action == "enable")
+    elif action == "snooze":
         await coordinator.async_snooze_alarm(alarm_id, msg.get("snooze_duration"))
     elif action in ("dismiss", "stop"):
         await coordinator.async_stop_alarm(alarm_id)
@@ -637,18 +643,22 @@ class AlarmsSnoozeIntentHandler(intent.IntentHandler):
     """Handler to snooze ringing alarms via voice assistant (Assist)."""
 
     intent_type = "alarms__snooze"
-    description = "Snoozes ringing alarms in the voice satellite's room"
-    slot_schema = {vol.Optional("area"): cv.string}
+    description = "Snoozes ringing alarms in the voice satellite device"
+    slot_schema = {}
 
     async def async_handle(self, intent_obj: intent.Intent) -> intent.IntentResponse:
         """Handle the voice intent."""
+        if not getattr(intent_obj, "device_id", None):
+            response = intent_obj.create_response()
+            set_response_error(response, "A satellite device context is required.")
+            return response
         coordinator = get_coordinator(intent_obj.hass)
         if not coordinator:
             response = intent_obj.create_response()
             set_response_error(response, "Sorry, the alarms integration is not loaded.")
             return response
 
-        ringing = alarms_for_intent_area(
+        ringing = alarms_for_intent_device(
             intent_obj,
             [a for a in coordinator.alarms.values() if a["status"] == STATE_RINGING],
         )
@@ -669,18 +679,22 @@ class AlarmsDismissIntentHandler(intent.IntentHandler):
     """Handler to dismiss ringing or snoozed alarms via voice assistant (Assist)."""
 
     intent_type = "alarms__dismiss"
-    description = "Stops ringing or snoozed alarms in the voice satellite's room"
-    slot_schema = {vol.Optional("area"): cv.string}
+    description = "Stops ringing or snoozed alarms in the voice satellite device"
+    slot_schema = {}
 
     async def async_handle(self, intent_obj: intent.Intent) -> intent.IntentResponse:
         """Handle the voice intent."""
+        if not getattr(intent_obj, "device_id", None):
+            response = intent_obj.create_response()
+            set_response_error(response, "A satellite device context is required.")
+            return response
         coordinator = get_coordinator(intent_obj.hass)
         if not coordinator:
             response = intent_obj.create_response()
             set_response_error(response, "Sorry, the alarms integration is not loaded.")
             return response
 
-        active = alarms_for_intent_area(
+        active = alarms_for_intent_device(
             intent_obj,
             [
                 a
@@ -705,16 +719,19 @@ class AlarmsCreateIntentHandler(intent.IntentHandler):
     """Handler to create a new alarm via voice assistant (Assist)."""
 
     intent_type = "alarms__create"
-    description = "Creates a wake-up alarm, defaulting to the voice satellite's room"
+    description = "Creates a wake-up alarm, defaulting to the voice satellite device"
     slot_schema = {
         vol.Required("time"): cv.string,
         vol.Optional("name"): cv.string,
         vol.Optional("days"): vol.Any(cv.string, vol.All(cv.ensure_list, [vol.Any(cv.string, vol.Coerce(int))])),
-        vol.Optional("area"): cv.string,
     }
 
     async def async_handle(self, intent_obj: intent.Intent) -> intent.IntentResponse:
         """Handle the voice intent."""
+        if not getattr(intent_obj, "device_id", None):
+            response = intent_obj.create_response()
+            set_response_error(response, "A satellite device context is required.")
+            return response
         coordinator = get_coordinator(intent_obj.hass)
         if not coordinator:
             response = intent_obj.create_response()
@@ -760,28 +777,14 @@ class AlarmsCreateIntentHandler(intent.IntentHandler):
             days_val = intent_obj.slots["days"]["value"]
             days = parse_days(days_val)
 
-        # Use an explicit area, otherwise default to the requesting satellite's area.
-        area_id = get_intent_area_id(intent_obj)
-        area_name_speech = None
-        if area_id:
-            area_entry = next(
-                (
-                    area
-                    for area in ar.async_get(intent_obj.hass).areas.values()
-                    if area.id == area_id
-                ),
-                None,
-            )
-            area_name_speech = (
-                area_entry.name if area_entry else area_id.replace("_", " ")
-            )
+        device_id = getattr(intent_obj, "device_id", None)
 
         try:
             await coordinator.async_create_alarm(
                 name=name,
                 time_val=time_val,
                 days=days,
-                area_id=area_id,
+                device_id=device_id,
             )
         except ValueError as err:
             response = intent_obj.create_response()
@@ -801,8 +804,6 @@ class AlarmsCreateIntentHandler(intent.IntentHandler):
                 days_str = "on " + ", ".join([days_map[d] for d in days])
 
         area_suffix = ""
-        if area_name_speech:
-            area_suffix = f" in the {area_name_speech}"
 
         response = intent_obj.create_response()
         response.async_set_speech(
@@ -823,6 +824,10 @@ class AlarmsDeleteIntentHandler(intent.IntentHandler):
 
     async def async_handle(self, intent_obj: intent.Intent) -> intent.IntentResponse:
         """Handle the voice intent."""
+        if not getattr(intent_obj, "device_id", None):
+            response = intent_obj.create_response()
+            set_response_error(response, "A satellite device context is required.")
+            return response
         coordinator = get_coordinator(intent_obj.hass)
         if not coordinator:
             response = intent_obj.create_response()
@@ -842,16 +847,19 @@ class AlarmsDeleteIntentHandler(intent.IntentHandler):
             target_alarm = coordinator.alarms.get(alarm_id)
         elif name:
             name_lower = name.strip().lower()
-            for alarm in coordinator.alarms.values():
+            for alarm in alarms_for_intent_device(intent_obj, list(coordinator.alarms.values())):
                 if alarm["name"].lower() == name_lower:
                     target_alarm = alarm
                     break
             if not target_alarm:
-                for alarm in coordinator.alarms.values():
+                for alarm in alarms_for_intent_device(intent_obj, list(coordinator.alarms.values())):
                     alarm_time_str = alarm["time"].strftime("%H:%M")
                     if name_lower in alarm_time_str or alarm_time_str in name_lower:
                         target_alarm = alarm
                         break
+
+        if target_alarm and target_alarm not in alarms_for_intent_device(intent_obj, list(coordinator.alarms.values())):
+            target_alarm = None
 
         if not target_alarm:
             response = intent_obj.create_response()
@@ -869,18 +877,21 @@ class AlarmsUpdateIntentHandler(intent.IntentHandler):
     """Handler to update/edit an existing alarm via voice assistant (Assist)."""
 
     intent_type = "alarms__update"
-    description = "Updates an existing alarm's name, time, repetition, or room"
+    description = "Updates an existing alarm's name, time, repetition, or enabled state"
     slot_schema = {
         vol.Optional("alarm_id"): cv.string,
         vol.Optional("name"): cv.string,
         vol.Optional("new_name"): cv.string,
         vol.Optional("new_time"): cv.string,
         vol.Optional("new_days"): vol.Any(cv.string, vol.All(cv.ensure_list, [vol.Any(cv.string, vol.Coerce(int))])),
-        vol.Optional("new_area"): cv.string,
     }
 
     async def async_handle(self, intent_obj: intent.Intent) -> intent.IntentResponse:
         """Handle the voice intent."""
+        if not getattr(intent_obj, "device_id", None):
+            response = intent_obj.create_response()
+            set_response_error(response, "A satellite device context is required.")
+            return response
         coordinator = get_coordinator(intent_obj.hass)
         if not coordinator:
             response = intent_obj.create_response()
@@ -900,16 +911,19 @@ class AlarmsUpdateIntentHandler(intent.IntentHandler):
             target_alarm = coordinator.alarms.get(alarm_id)
         elif name:
             name_lower = name.strip().lower()
-            for alarm in coordinator.alarms.values():
+            for alarm in alarms_for_intent_device(intent_obj, list(coordinator.alarms.values())):
                 if alarm["name"].lower() == name_lower:
                     target_alarm = alarm
                     break
             if not target_alarm:
-                for alarm in coordinator.alarms.values():
+                for alarm in alarms_for_intent_device(intent_obj, list(coordinator.alarms.values())):
                     alarm_time_str = alarm["time"].strftime("%H:%M")
                     if name_lower in alarm_time_str or alarm_time_str in name_lower:
                         target_alarm = alarm
                         break
+
+        if target_alarm and target_alarm not in alarms_for_intent_device(intent_obj, list(coordinator.alarms.values())):
+            target_alarm = None
 
         if not target_alarm:
             response = intent_obj.create_response()
@@ -970,29 +984,9 @@ class AlarmsUpdateIntentHandler(intent.IntentHandler):
                 days_str = "on " + ", ".join([days_map[d] for d in days])
             speech_parts.append(f"set repetition to {days_str}")
 
-        # 4. New Area
-        if "new_area" in intent_obj.slots:
-            new_area_val = intent_obj.slots["new_area"]["value"]
-            new_area_id = None
-            new_area_name = new_area_val
-            if new_area_val.lower() not in ("none", "clear", "no area"):
-                try:
-                    from homeassistant.helpers import area_registry as ar
-                    area_reg = ar.async_get(intent_obj.hass)
-                    if area_reg and hasattr(area_reg, "areas"):
-                        for area_entry in area_reg.areas.values():
-                            if area_entry.name.lower() == new_area_val.lower() or area_entry.id.lower() == new_area_val.lower():
-                                new_area_id = area_entry.id
-                                new_area_name = area_entry.name
-                                break
-                except Exception:
-                    pass
-            updated_fields["area_id"] = new_area_id
-            speech_parts.append(f"set area to {new_area_name}" if new_area_id else "cleared the area")
-
         if not updated_fields:
             response = intent_obj.create_response()
-            set_response_error(response, "Please specify what you want to change (name, time, repeating days, or area).")
+            set_response_error(response, "Please specify what you want to change (name, time, repeating days, or enabled state).")
             return response
 
         try:
@@ -1010,3 +1004,120 @@ class AlarmsUpdateIntentHandler(intent.IntentHandler):
             f"I have updated the alarm '{target_alarm['name']}': " + " and ".join(speech_parts) + "."
         )
         return response
+
+
+@websocket_api.websocket_command({vol.Required("type"): "alarms/satellite/subscribe", vol.Required("device_id"): cv.string})
+@callback
+def ws_satellite_subscribe(hass, connection, msg):
+    """Send an initial queue and replacement snapshots on every mutation."""
+    coordinator = get_coordinator(hass)
+    if not coordinator:
+        connection.send_error(msg["id"], "not_loaded", "Integration not loaded")
+        return
+    try:
+        coordinator.validate_device(msg["device_id"])
+    except ValueError as err:
+        connection.send_error(msg["id"], "invalid_device", str(err))
+        return
+
+    @callback
+    def forward(event):
+        if event.data["device_id"] == msg["device_id"]:
+            connection.send_message(websocket_api.event_message(msg["id"], event.data))
+
+    cancel_schedule = hass.bus.async_listen("alarms_schedule", forward)
+    cancel_commands = hass.bus.async_listen("alarms_command", forward)
+    cancel_results = hass.bus.async_listen("alarms_command_result", forward)
+    connection.subscriptions[msg["id"]] = lambda: (cancel_schedule(), cancel_commands(), cancel_results())
+    coordinator._published_devices = getattr(coordinator, "_published_devices", set()) | {msg["device_id"]}
+    connection.send_result(msg["id"])
+    connection.send_message(websocket_api.event_message(msg["id"], coordinator.satellite_schedule(msg["device_id"])))
+
+
+@websocket_api.websocket_command({vol.Required("type"): "alarms/satellite/report", vol.Required("device_id"): cv.string, vol.Required("alarm_id"): cv.string, vol.Required("status"): vol.In(["ringing", "dismissed", "snoozed"]), vol.Optional("duration"): vol.All(vol.Coerce(int), vol.Range(min=1, max=60))})
+@websocket_api.async_response
+async def ws_satellite_report(hass, connection, msg):
+    """Accept execution state from a satellite adapter."""
+    coordinator = get_coordinator(hass)
+    alarm = coordinator.alarms.get(msg["alarm_id"]) if coordinator else None
+    if not alarm or alarm.get("device_id") != msg["device_id"]:
+        connection.send_error(msg["id"], "invalid_alarm", "Alarm does not belong to this device")
+        return
+    if msg["status"] == "ringing":
+        await coordinator.async_trigger_alarm(alarm["id"])
+    elif msg["status"] == "snoozed":
+        await coordinator.async_snooze_alarm(alarm["id"], msg.get("duration"))
+    else:
+        await coordinator.async_dismiss_alarm(alarm["id"])
+    connection.send_result(msg["id"], {"success": True})
+
+
+class AlarmsListIntentHandler(intent.IntentHandler):
+    """Read alarms belonging to the voice device only."""
+
+    intent_type = "alarms__list"
+    description = "Lists alarms on the requesting satellite device"
+    slot_schema = {}
+
+    async def async_handle(self, intent_obj):
+        response = intent_obj.create_response()
+        if not getattr(intent_obj, "device_id", None):
+            response = intent_obj.create_response()
+            set_response_error(response, "A satellite device context is required.")
+            return response
+        coordinator = get_coordinator(intent_obj.hass)
+        if not coordinator or not getattr(intent_obj, "device_id", None):
+            set_response_error(response, "A satellite device context is required.")
+            return response
+        alarms = alarms_for_intent_device(intent_obj, list(coordinator.alarms.values()))
+        response.async_set_speech("; ".join(f"{a['id']}: {a['name']} at {a['time'].isoformat()}, days {a['days']}, {a['status']}" for a in alarms) or "No alarms on this device.")
+        return response
+
+
+class AlarmsControlIntentHandler(intent.IntentHandler):
+    """Enable, disable, or skip a device's alarm through Assist."""
+
+    intent_type = "alarms__control"
+    description = "Enables, disables, skips or unskips an alarm on the requesting satellite"
+    slot_schema = {
+        vol.Required("alarm_id"): cv.string,
+        vol.Required("action"): vol.In(["enable", "disable", "skip_next", "unskip_next"]),
+    }
+
+    async def async_handle(self, intent_obj):
+        response = intent_obj.create_response()
+        if not getattr(intent_obj, "device_id", None):
+            response = intent_obj.create_response()
+            set_response_error(response, "A satellite device context is required.")
+            return response
+        coordinator = get_coordinator(intent_obj.hass)
+        alarms = alarms_for_intent_device(intent_obj, list(coordinator.alarms.values())) if coordinator else []
+        alarm_id = intent_obj.slots["alarm_id"]["value"]
+        if not any(a["id"] == alarm_id for a in alarms):
+            set_response_error(response, "No matching alarm on this satellite device.")
+            return response
+        action = intent_obj.slots["action"]["value"]
+        if action in ("enable", "disable"):
+            await coordinator.async_toggle_alarm(alarm_id, action == "enable")
+        elif action == "skip_next":
+            await coordinator.async_skip_next(alarm_id)
+        else:
+            await coordinator.async_unskip_next(alarm_id)
+        response.async_set_speech("Alarm updated.")
+        return response
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "alarms/satellite/command",
+    vol.Required("device_id"): cv.string,
+    vol.Required("command"): vol.Any(dict, cv.string),
+})
+@websocket_api.async_response
+async def ws_satellite_command(hass, connection, msg):
+    """Expose device UI CRUD and controls with explicit ownership checks."""
+    coordinator = get_coordinator(hass)
+    if not coordinator:
+        connection.send_error(msg["id"], "not_loaded", "Integration not loaded")
+        return
+    result = await async_dispatch_command(coordinator, msg["device_id"], msg["command"])
+    connection.send_result(msg["id"], result)

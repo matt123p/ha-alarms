@@ -2,12 +2,11 @@
 import datetime
 import logging
 import uuid
-import zoneinfo
 from typing import Any
 
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_send
-from homeassistant.helpers.event import async_track_point_in_time
+from homeassistant.helpers.event import async_track_point_in_time, async_track_time_interval
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
@@ -58,6 +57,8 @@ class AlarmsCoordinator:
         self._store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
         self._timers: dict[str, Any] = {}
         self.add_entities_callback: Any = None
+        self._published_devices: set[str] = set()
+        self._refresh_cancel = None
 
     async def async_setup(self) -> None:
         """Load stored alarms and initialize timers."""
@@ -67,6 +68,7 @@ class AlarmsCoordinator:
                 # Deserialization
                 alarm = dict(alarm_data)
                 alarm["time"] = datetime.time.fromisoformat(alarm["time"])
+                alarm.setdefault("device_id", None)
                 
                 if alarm.get("next_trigger"):
                     alarm["next_trigger"] = dt_util.parse_datetime(alarm["next_trigger"])
@@ -92,11 +94,13 @@ class AlarmsCoordinator:
                     alarm["next_trigger"] is None 
                     or alarm["next_trigger"] < now_local
                 ) and alarm["status"] != STATE_SNOOZED:
-                    alarm["next_trigger"] = calculate_next_trigger(
+                    alarm["next_trigger"] = (calculate_next_trigger(
                         alarm["time"], alarm["days"], now_local
-                    )
+                    ) if alarm["days"] else None)
                     alarm["status"] = STATE_IDLE
                 self.schedule_timer(alarm_id)
+        self.publish_schedules()
+        self._refresh_cancel = async_track_time_interval(self.hass, lambda now: self.publish_schedules(), datetime.timedelta(minutes=1))
 
     def serialize_alarms(self) -> dict[str, Any]:
         """Convert alarm objects to JSON serializable dictionaries."""
@@ -114,6 +118,7 @@ class AlarmsCoordinator:
     async def async_save(self) -> None:
         """Save alarms to HA storage."""
         await self._store.async_save(self.serialize_alarms())
+        self.publish_schedules()
 
     @callback
     def async_get_alarm(self, alarm_id: str) -> dict[str, Any] | None:
@@ -136,39 +141,73 @@ class AlarmsCoordinator:
                 next_alarm = alarm
         return next_alarm
 
-    def _validate_and_resolve_area(self, area_id: str | None) -> str | None:
-        """Validate and resolve the area/location name or ID against registry."""
-        if area_id is None:
-            return None
+    def validate_device(self, device_id: str | None) -> None:
+        """Require a concrete registered satellite, independent of its area."""
+        from homeassistant.helpers import device_registry as dr
+        if not device_id or not dr.async_get(self.hass).async_get(device_id):
+            raise ValueError("Select a registered satellite device for this alarm")
 
-        if isinstance(area_id, str):
-            val_lower = area_id.strip().lower()
-            if val_lower == "" or val_lower in ("none", "clear", "no area"):
-                return None
+    def satellite_schedule(self, device_id: str) -> dict[str, Any]:
+        """Return the next five occurrences plus every occurrence within two hours."""
+        now = dt_util.now()
+        horizon_timestamp = now.timestamp() + 2 * 60 * 60
+        serialized = self.serialize_alarms()
+        occurrences = []
+        for alarm in self.alarms.values():
+            if alarm.get("device_id") != device_id or not alarm["enabled"]:
+                continue
+            target = alarm.get("snoozed_until") or alarm.get("next_trigger")
+            if target is None:
+                continue
+            skipped = alarm.get("silenced", False)
+            count = 0
+            while count < 5 or target.timestamp() <= horizon_timestamp:
+                if target.timestamp() > now.timestamp() and not skipped:
+                    item = dict(serialized[alarm["id"]])
+                    item.update(trigger_at=target.isoformat(), timestamp=target.timestamp(),
+                                occurrence_id=f"{alarm['id']}:{int(target.timestamp())}")
+                    occurrences.append(item)
+                    count += 1
+                skipped = False
+                if not alarm["days"]:
+                    break
+                target = calculate_next_trigger(alarm["time"], alarm["days"], target)
+        occurrences.sort(key=lambda item: (item["timestamp"], item["id"]))
+        selected = [item for index, item in enumerate(occurrences)
+                    if index < 5 or item["timestamp"] <= horizon_timestamp]
+        return {"type": "schedule", "device_id": device_id, "generated_at": now.isoformat(),
+                "configured_alarms": [a for a in serialized.values() if a.get("device_id") == device_id],
+                "timezone": self.hass.config.time_zone, "alarms": selected}
 
-        # Fetch the area registry
-        from homeassistant.helpers import area_registry as ar
-        area_reg = ar.async_get(self.hass)
-        if not area_reg or not hasattr(area_reg, "areas"):
-            return area_id
-            
-        areas = area_reg.areas
-        if "mock" in type(areas).__name__.lower():
-            return area_id
+    @callback
+    def publish_schedules(self) -> None:
+        """Publish replacement snapshots, including empty queues after deletion."""
+        devices = getattr(self, "_published_devices", set())
+        devices |= {a["device_id"] for a in self.alarms.values() if a.get("device_id")}
+        self._published_devices = devices
+        for device_id in devices:
+            self.hass.bus.async_fire("alarms_schedule", self.satellite_schedule(device_id))
 
-        normalized_input = area_id.replace("_", " ").strip().lower()
-        
-        for area_entry in area_reg.areas.values():
-            normalized_entry_id = area_entry.id.lower()
-            normalized_entry_name = area_entry.name.lower()
-            normalized_entry_id_spaces = area_entry.id.replace("_", " ").lower()
-            
-            if (normalized_entry_id == normalized_input or 
-                normalized_entry_name == normalized_input or 
-                normalized_entry_id_spaces == normalized_input):
-                return area_entry.id
-
-        raise ValueError(f"Invalid location/area: '{area_id}'")
+    async def async_advance_alarm(self, alarm_id: str) -> None:
+        """Advance stored occurrences without triggering sound or ringing in HA."""
+        alarm = self.alarms.get(alarm_id)
+        if not alarm or not alarm["enabled"]:
+            return
+        if alarm["status"] == STATE_SNOOZED:
+            alarm["snoozed_until"] = None
+        skipped = alarm["silenced"]
+        alarm["silenced"] = False
+        if skipped:
+            self.hass.bus.async_fire(EVENT_ALARM_SKIPPED, {"alarm_id": alarm_id, "name": alarm["name"], "device_id": alarm.get("device_id")})
+            alarm["status"] = STATE_IDLE if alarm["days"] else STATE_DISABLED
+            if not alarm["days"]:
+                alarm["enabled"] = False
+        if alarm["days"]:
+            alarm["next_trigger"] = calculate_next_trigger(alarm["time"], alarm["days"], dt_util.now())
+        else:
+            alarm["next_trigger"] = None
+        await self.async_save_and_update(alarm_id)
+        self.schedule_timer(alarm_id)
 
     async def async_create_alarm(
         self,
@@ -179,10 +218,12 @@ class AlarmsCoordinator:
         days: list[int] | None = None,
         snooze_duration: int = 5,
         media_player: str | None = None,
-        area_id: str | None = None,
+        device_id: str | None = None,
     ) -> str:
         """Create a new alarm."""
-        area_id = self._validate_and_resolve_area(area_id)
+        self.validate_device(device_id)
+        if not 1 <= snooze_duration <= 60:
+            raise ValueError("Snooze duration must be between 1 and 60 minutes")
         alarm_id = str(uuid.uuid4())
         days_list = days or []
         now_local = dt_util.now()
@@ -191,6 +232,7 @@ class AlarmsCoordinator:
 
         alarm = {
             "id": alarm_id,
+            "device_id": device_id,
             "name": name,
             "time": time_val,
             "color": color,
@@ -203,7 +245,7 @@ class AlarmsCoordinator:
             "snoozed_until": None,
             "next_trigger": next_trigger,
             "media_player": media_player,
-            "area_id": area_id,
+            "area_id": None,
         }
 
         self.alarms[alarm_id] = alarm
@@ -261,16 +303,18 @@ class AlarmsCoordinator:
         days: list[int] | None = UNDEFINED,
         snooze_duration: int | None = UNDEFINED,
         media_player: str | None = UNDEFINED,
-        area_id: str | None = UNDEFINED,
+        device_id: str | None = UNDEFINED,
     ) -> None:
         """Update alarm attributes."""
         alarm = self.alarms.get(alarm_id)
         if not alarm:
             return
 
-        resolved_area_id = UNDEFINED
-        if area_id is not UNDEFINED:
-            resolved_area_id = self._validate_and_resolve_area(area_id)
+        if snooze_duration is not UNDEFINED and not 1 <= snooze_duration <= 60:
+            raise ValueError("Snooze duration must be between 1 and 60 minutes")
+        if device_id is not UNDEFINED:
+            self.validate_device(device_id)
+            alarm["device_id"] = device_id
 
         if name is not UNDEFINED:
             alarm["name"] = name
@@ -286,8 +330,6 @@ class AlarmsCoordinator:
             alarm["snooze_duration"] = snooze_duration
         if media_player is not UNDEFINED:
             alarm["media_player"] = media_player
-        if resolved_area_id is not UNDEFINED:
-            alarm["area_id"] = resolved_area_id
 
         # Recalculate next trigger if enabled
         if alarm["enabled"]:
@@ -328,11 +370,14 @@ class AlarmsCoordinator:
         if not alarm or alarm["status"] != STATE_RINGING:
             return
 
-        duration = duration_minutes or alarm.get("snooze_duration", 5)
+        duration = duration_minutes if duration_minutes is not None else alarm.get("snooze_duration", 5)
+        if not 1 <= duration <= 60:
+            raise ValueError("Snooze duration must be between 1 and 60 minutes")
         now_local = dt_util.now()
         snoozed_until = now_local + datetime.timedelta(minutes=duration)
 
         alarm["snoozed_until"] = snoozed_until
+        self.remote_command(alarm, "snooze", duration_minutes=duration)
         alarm["status"] = STATE_SNOOZED
         
         await self.async_save_and_update(alarm_id)
@@ -354,6 +399,7 @@ class AlarmsCoordinator:
         if not alarm or alarm["status"] not in (STATE_RINGING, STATE_SNOOZED):
             return
 
+        self.remote_command(alarm, "dismiss")
         alarm["snoozed_until"] = None
 
         if not alarm["days"]:
@@ -411,7 +457,7 @@ class AlarmsCoordinator:
             del self._timers[alarm_id]
 
         alarm = self.alarms.get(alarm_id)
-        if not alarm or not alarm["enabled"]:
+        if not alarm or not alarm["enabled"] or not alarm.get("device_id"):
             return
 
         # Target is snoozed_until if snoozed, else next_trigger
@@ -424,7 +470,7 @@ class AlarmsCoordinator:
 
         @callback
         def alarm_timer_fired(now: datetime.datetime) -> None:
-            self.hass.async_create_task(self.async_trigger_alarm(alarm_id))
+            self.hass.async_create_task(self.async_advance_alarm(alarm_id))
 
         self._timers[alarm_id] = async_track_point_in_time(
             self.hass, alarm_timer_fired, target_utc
@@ -433,7 +479,7 @@ class AlarmsCoordinator:
     async def async_trigger_alarm(self, alarm_id: str) -> None:
         """Trigger the alarm to start ringing."""
         alarm = self.alarms.get(alarm_id)
-        if not alarm or not alarm["enabled"]:
+        if not alarm or not alarm.get("device_id"):
             return
 
         # Handle silenced (skip next)
@@ -475,37 +521,15 @@ class AlarmsCoordinator:
             },
         )
 
-        # Trigger media_player play if set
-        if alarm.get("media_player") and alarm.get("sound") != "silent.wav":
-            await self.async_play_media(alarm)
+        # Playback belongs to the satellite; HA only stores reported state.
 
-    async def async_play_media(self, alarm: dict[str, Any]) -> None:
-        """Play the alarm sound on the configured media player."""
-        media_player = alarm["media_player"]
-        sound = alarm["sound"]
-        
-        # Build sound URL (served from static web folder)
-        # We can try to resolve the external/internal URL of Home Assistant
-        # A common fallback is using network path relative to host
-        # Home Assistant base url:
-        from homeassistant.helpers.network import get_url
-        try:
-            base_url = get_url(self.hass)
-            sound_url = f"{base_url}/alarms_static/sounds/{sound}"
-            
-            _LOGGER.info("Playing alarm media %s on %s", sound_url, media_player)
-            
-            await self.hass.services.async_call(
-                "media_player",
-                "play_media",
-                {
-                    "entity_id": media_player,
-                    "media_content_id": sound_url,
-                    "media_content_type": "music",
-                },
-            )
-        except Exception as err:
-            _LOGGER.error("Failed to play alarm sound on media player: %s", err)
+    def remote_command(self, alarm: dict[str, Any], action: str, **data: Any) -> None:
+        """Send a control command to the device adapter."""
+        if alarm.get("device_id"):
+            self.hass.bus.async_fire("alarms_command", {
+                "type": "command", "device_id": alarm["device_id"], "alarm_id": alarm["id"],
+                "action": action, **data,
+            })
 
     async def async_save_and_update(self, alarm_id: str) -> None:
         """Save storage and trigger HA entity updates."""

@@ -155,7 +155,11 @@ mock_helpers.intent = mock_intent
 sys.modules["homeassistant.helpers.network"] = MagicMock()
 
 sys.modules["homeassistant.components"] = MagicMock()
-sys.modules["homeassistant.components.websocket_api"] = MagicMock()
+mock_websocket = MagicMock()
+mock_websocket.websocket_command = lambda schema: lambda func: func
+mock_websocket.async_response = lambda func: func
+sys.modules["homeassistant.components.websocket_api"] = mock_websocket
+sys.modules["homeassistant.components"].websocket_api = mock_websocket
 sys.modules["homeassistant.components.switch"] = MagicMock()
 sys.modules["homeassistant.components.time"] = MagicMock()
 
@@ -175,122 +179,15 @@ sys.modules["homeassistant.config_entries"] = MagicMock()
 import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# ----------------------------------------------------
-# Import Tests
-# ----------------------------------------------------
-from tests.test_scheduler import (
-    test_one_off_alarm_today,
-    test_one_off_alarm_tomorrow,
-    test_repeating_alarm_multiple_days,
-    test_dst_spring_forward,
-    test_dst_autumn_backward,
-)
-from tests.test_coordinator import (
-    test_coordinator_setup_and_create,
-    test_alarm_lifecycle,
-    test_skip_next_alarm,
-    test_global_next_alarm,
-    test_silent_alarm,
-    test_update_alarm,
-    test_next_alarm_by_area,
-    test_area_validation_and_correction,
-)
-from tests.test_intents import (
-    test_parse_days,
-    test_create_intent_success,
-    test_create_intent_failures,
-    test_delete_intent,
-    test_update_intent,
-    test_intent_invalid_area,
-    test_voice_satellite_area_defaults_and_scoping,
-)
-
-
-async def main() -> None:
-    """Run all tests."""
-    print("Running scheduler tests...")
-    test_one_off_alarm_today()
-    test_one_off_alarm_tomorrow()
-    test_repeating_alarm_multiple_days()
-    test_dst_spring_forward()
-    test_dst_autumn_backward()
-    print("[OK] Scheduler tests passed.")
-
-    print("\nRunning intent tests...")
-    test_parse_days()
-    await test_create_intent_success()
-    await test_create_intent_failures()
-    await test_delete_intent()
-    await test_update_intent()
-    await test_intent_invalid_area()
-    await test_voice_satellite_area_defaults_and_scoping()
-    print("[OK] Intent tests passed.")
-
-    print("\nRunning coordinator tests...")
-    
-    # Mock parameters
-    mock_hass = MagicMock()
-    mock_hass.config.time_zone = "Europe/London"
-    mock_hass.bus = MagicMock()
-    mock_hass.bus.async_fire = MagicMock()
-    mock_hass.services = MagicMock()
-    mock_hass.services.async_call = AsyncMock()
-    
-    mock_store = MagicMock()
-    mock_store.async_load = AsyncMock(return_value={})
-    mock_store.async_save = AsyncMock()
-    
-    # Run coordinator test 1
-    await test_coordinator_setup_and_create(mock_hass, mock_store)
-    mock_hass.reset_mock()
-    mock_store.reset_mock()
-    
-    # Run coordinator test 2
-    await test_alarm_lifecycle(mock_hass, mock_store)
-    mock_hass.reset_mock()
-    mock_store.reset_mock()
-    
-    # Run coordinator test 3
-    await test_skip_next_alarm(mock_hass, mock_store)
-    mock_hass.reset_mock()
-    mock_store.reset_mock()
-    
-    # Run coordinator test 4
-    await test_global_next_alarm(mock_hass, mock_store)
-    mock_hass.reset_mock()
-    mock_store.reset_mock()
-    
-    # Run coordinator test 5
-    await test_silent_alarm(mock_hass, mock_store)
-    mock_hass.reset_mock()
-    mock_store.reset_mock()
-
-    # Run coordinator test 6
-    await test_update_alarm(mock_hass, mock_store)
-    mock_hass.reset_mock()
-    mock_store.reset_mock()
-
-    # Run coordinator test 7
-    await test_next_alarm_by_area(mock_hass, mock_store)
-    mock_hass.reset_mock()
-    mock_store.reset_mock()
-
-    # Run coordinator test 8
-    await test_area_validation_and_correction(mock_hass, mock_store)
-    print("[OK] Coordinator tests passed.")
-    
-    print("\n==============================")
-    print("ALL TESTS PASSED SUCCESSFULLY!")
-    print("==============================")
-
+# Run satellite regression tests against the lightweight HA mocks above.
+import unittest
+from tests.test_coordinator import SatelliteTests
+from tests.test_intents import test_parse_days
+from tests import test_scheduler
 
 if __name__ == "__main__":
-    import asyncio
-    try:
-        asyncio.run(main())
-    except AssertionError as err:
-        print(f"\n[FAIL] TEST FAILURE: AssertionError", file=sys.stderr)
-        raise err
-    except Exception as err:
-        print(f"\n[FAIL] TEST ERROR: {err}", file=sys.stderr)
-        raise err
+    for name in dir(test_scheduler):
+        if name.startswith("test_"):
+            getattr(test_scheduler, name)()
+    test_parse_days()
+    unittest.main(module="tests.test_coordinator", verbosity=2)

@@ -1,6 +1,6 @@
 /**
  * Lovelace Card and Sidebar Panel for Alarms custom integration.
- * Fully self-contained Web Component with a premium glassmorphic UI.
+ * Device-aware Web Component for satellite alarm storage.
  */
 
 class AlarmsPanelCard extends HTMLElement {
@@ -9,10 +9,9 @@ class AlarmsPanelCard extends HTMLElement {
     this.attachShadow({ mode: "open" });
     this._alarms = {};
     this._mediaPlayers = [];
+    this._devices = [];
     this._showModal = false;
     this._editingId = null;
-    this._playingId = null;
-    this._audio = null;
 
     // Default form state
     this._formState = {
@@ -23,7 +22,7 @@ class AlarmsPanelCard extends HTMLElement {
       days: [],
       snooze_duration: 9,
       media_player: "",
-      area_id: "",
+      device_id: this._selectedDevice && this._selectedDevice !== "unassigned" ? this._selectedDevice : "",
     };
   }
 
@@ -60,7 +59,7 @@ class AlarmsPanelCard extends HTMLElement {
           sound: a.sound,
           snooze_duration: a.snooze_duration,
           media_player: a.media_player,
-          area_id: a.area_id,
+          device_id: a.device_id,
           next_trigger: a.next_trigger,
           snoozed_until: a.snoozed_until,
           silenced: a.silenced,
@@ -74,7 +73,7 @@ class AlarmsPanelCard extends HTMLElement {
     }
 
     // Check if ringing alarms need browser audio playback
-    this._syncBrowserAudio();
+    // Satellite devices own playback.
 
     // Render if first time, media players changed, or alarms changed,
     // and the modal is not currently open to avoid disrupting user input.
@@ -116,7 +115,7 @@ class AlarmsPanelCard extends HTMLElement {
   disconnectedCallback() {
     if (this._wsUnsubscribe) this._wsUnsubscribe();
     if (this._clockInterval) clearInterval(this._clockInterval);
-    this.stopAllAudio();
+    if (this._previewAudio) this._previewAudio.pause();
   }
 
   // WebSocket Connection
@@ -127,6 +126,7 @@ class AlarmsPanelCard extends HTMLElement {
     }
 
     try {
+      this._devices = await this._hass.connection.sendMessagePromise({type: "config/device_registry/list"});
       // Fetch initial list of alarms
       const alarms = await this._hass.connection.sendMessagePromise({
         type: "alarms/list",
@@ -163,54 +163,6 @@ class AlarmsPanelCard extends HTMLElement {
     } catch (err) {
       console.error("Failed to refresh alarms:", err);
     }
-  }
-
-  // Browser Audio Handling
-  _syncBrowserAudio() {
-    let ringingAlarm = null;
-    const cardArea = this._config && this._config.area;
-    for (const alarm of Object.values(this._alarms)) {
-      if (alarm.status === "ringing") {
-        const alarmArea = alarm.area_id;
-        if (!alarmArea || (cardArea && cardArea === alarmArea)) {
-          ringingAlarm = alarm;
-          break;
-        }
-      }
-    }
-
-    if (ringingAlarm) {
-      this.playAudio(ringingAlarm);
-    } else {
-      this.stopAllAudio();
-    }
-  }
-
-  playAudio(alarm) {
-    if (this._playingId === alarm.id) return;
-    this.stopAllAudio();
-
-    this._playingId = alarm.id;
-    if (alarm.sound === "silent.wav") {
-      return;
-    }
-
-    const soundUrl = `/alarms_static/sounds/${alarm.sound}`;
-    this._audio = new Audio(soundUrl);
-    this._audio.loop = true;
-
-    // Play with fallback warning
-    this._audio.play().catch((err) => {
-      console.warn("Audio playback blocked. Click on the UI to play alarm sounds.", err);
-    });
-  }
-
-  stopAllAudio() {
-    if (this._audio) {
-      this._audio.pause();
-      this._audio = null;
-    }
-    this._playingId = null;
   }
 
   _updateClock() {
@@ -264,18 +216,14 @@ class AlarmsPanelCard extends HTMLElement {
   }
 
   async _toggleAlarm(alarmId, enabled) {
-    // Update local state immediately for snappy UI
-    if (this._alarms[alarmId]) {
-      this._alarms[alarmId].enabled = enabled;
-      this._alarms[alarmId].status = enabled ? "idle" : "disabled";
-    }
-    this.render();
-
-    const entityId = this._getAlarmSwitchEntityId(alarmId);
-    if (entityId) {
-      this._callService("switch", enabled ? "turn_on" : "turn_off", {
-        entity_id: entityId,
+    try {
+      await this._hass.connection.sendMessagePromise({
+        type: "alarms/action", alarm_id: alarmId,
+        action: enabled ? "enable" : "disable",
       });
+    } catch (err) {
+      alert("Could not update alarm: " + err.message);
+      this.render();
     }
   }
 
@@ -314,7 +262,7 @@ class AlarmsPanelCard extends HTMLElement {
       days: [],
       snooze_duration: 5,
       media_player: "",
-      area_id: "",
+      device_id: this._selectedDevice && this._selectedDevice !== "unassigned" ? this._selectedDevice : "",
     };
     this._showModal = true;
     this.render();
@@ -330,13 +278,14 @@ class AlarmsPanelCard extends HTMLElement {
       days: [...alarm.days],
       snooze_duration: alarm.snooze_duration,
       media_player: alarm.media_player || "",
-      area_id: alarm.area_id || "",
+      device_id: alarm.device_id || "",
     };
     this._showModal = true;
     this.render();
   }
 
   _closeModal() {
+    if (this._previewAudio) { this._previewAudio.pause(); this._previewAudio = null; }
     this._showModal = false;
     this.render();
   }
@@ -384,7 +333,7 @@ class AlarmsPanelCard extends HTMLElement {
     const sound = shadow.getElementById("sound").value;
     const snooze_duration = parseInt(shadow.getElementById("snooze_duration").value, 10);
     const media_player = shadow.getElementById("media_player").value || null;
-    const area_id = shadow.getElementById("area_id").value || null;
+    const device_id = shadow.getElementById("device_id").value || null;
     const days = this._formState.days;
 
     if (this._previewAudio) {
@@ -404,7 +353,7 @@ class AlarmsPanelCard extends HTMLElement {
           sound,
           snooze_duration,
           media_player,
-          area_id,
+          device_id,
           days,
         });
       } else {
@@ -417,7 +366,7 @@ class AlarmsPanelCard extends HTMLElement {
           sound,
           snooze_duration,
           media_player,
-          area_id,
+          device_id,
           days,
         });
       }
@@ -477,7 +426,7 @@ class AlarmsPanelCard extends HTMLElement {
       idle: 3,
       disabled: 4,
     };
-    const alarmsList = Object.values(this._alarms).sort((a, b) => {
+    const alarmsList = Object.values(this._alarms).filter(a => !this._selectedDevice || (a.device_id || "unassigned") === this._selectedDevice).sort((a, b) => {
       const statusDiff = (statusOrder[a.status] ?? 3) - (statusOrder[b.status] ?? 3);
       if (statusDiff !== 0) return statusDiff;
       return String(a.time || "").localeCompare(String(b.time || ""));
@@ -515,15 +464,9 @@ class AlarmsPanelCard extends HTMLElement {
       { file: "silent.wav", name: "Silent / None (Integration Trigger)" },
     ];
 
-    const areas = Object.values(this._hass.areas || {});
+    const areas = Object.values(this._hass.devices || this._devices || {}).filter(d => !(d.identifiers || []).some(i => i[0] === "alarms")).map(d => ({device_id: d.id, name: d.name_by_user || d.name || d.id}));
 
-    // Check audio prompt click
-    const cardArea = this._config && this._config.area;
-    const ringingAlarm = Object.values(this._alarms).find((a) => {
-      if (a.status !== "ringing") return false;
-      const alarmArea = a.area_id;
-      return !alarmArea || (cardArea && cardArea === alarmArea);
-    });
+    const ringingAlarm = alarmsList.find(a => a.status === "ringing");
 
     this.shadowRoot.innerHTML = `
       <style>
@@ -1540,6 +1483,20 @@ class AlarmsPanelCard extends HTMLElement {
             flex: 1 1 140px;
           }
         }
+        .page-description { color: var(--secondary-text-color); margin: 8px 0 16px; font-size: 14px; }
+        .device-tabs { display:flex; flex-wrap:wrap; gap:8px; margin: 8px 0; }
+        .device-tabs button { border:1px solid var(--divider-color); background:var(--card-background-color); color:var(--primary-text-color); border-radius:24px; padding:10px 18px; cursor:pointer; font:inherit; }
+        .device-tabs .selected { background:var(--primary-color); color:var(--text-primary-color, white); border-color:transparent; }
+        .container.panel-page { max-width:1100px; gap:24px; }
+        .panel-page .alarm-row { border-radius:18px; padding:22px; border:1px solid var(--divider-color); box-shadow:none; }
+        .summary-card { border-radius:16px; padding:18px; }
+        .summary-label { letter-spacing:.07em; margin-bottom:10px; }
+        .time-display { font-variant-numeric:tabular-nums; letter-spacing:-.05em; }
+        .btn-add, .btn-save { border-radius:24px; }
+        button:focus-visible, input:focus-visible, select:focus-visible { outline:3px solid var(--primary-color); outline-offset:3px; }
+        .days-row { display:none; }
+        .alarm-row { grid-template-columns: 100px minmax(0,1fr) auto auto !important; grid-template-areas:"time details actions menu" !important; }
+        @media(max-width:600px) { .alarm-row { grid-template-columns:1fr auto !important; grid-template-areas:"time menu" "details details" "actions actions" !important; } .device-tabs { flex-wrap:nowrap; overflow:auto; } .device-tabs button { white-space:nowrap; } }
       </style>
 
       <div class="container ${isPanelPage ? "panel-page" : "card-page"}">
@@ -1561,7 +1518,7 @@ class AlarmsPanelCard extends HTMLElement {
 
         <div class="header">
           <div class="title-area">
-            <h2>Alarms</h2>
+            <h2>Your alarms</h2><p class="page-description">A good morning starts here. Manage alarms for each satellite.</p>
             <div class="clock-area">
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="clock-icon"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
               <div class="digital-clock">00:00:00</div>
@@ -1571,6 +1528,10 @@ class AlarmsPanelCard extends HTMLElement {
           <button class="btn-add">+ Add Alarm</button>
         </div>
 
+        <nav class="device-tabs" aria-label="Filter by satellite">
+          <button data-device="" class="${!this._selectedDevice ? 'selected' : ''}">All devices</button>
+          ${[...new Set(Object.values(this._alarms).map(a => a.device_id || "unassigned"))].map(id => `<button data-device="${this._escapeHtml(id)}" class="${this._selectedDevice === id ? 'selected' : ''}">${this._escapeHtml(areas.find(a => a.device_id === id)?.name || (id === 'unassigned' ? 'Needs a device' : id))}</button>`).join('')}
+        </nav>
         ${isPanelPage
         ? `
           <div class="page-summary">
@@ -1582,7 +1543,7 @@ class AlarmsPanelCard extends HTMLElement {
             <div class="summary-card">
               <div class="summary-label">Enabled</div>
               <div class="summary-value">${enabledCount}/${alarmsList.length}</div>
-              <div class="summary-subvalue">Ready to ring</div>
+              <div class="summary-subvalue">Scheduled on satellites</div>
             </div>
             <div class="summary-card">
               <div class="summary-label">Active</div>
@@ -1617,7 +1578,7 @@ class AlarmsPanelCard extends HTMLElement {
             let statusText = alarmStatus;
             if (alarmStatus === "silenced") statusText = "Skipped Next";
             const alarmColor = this._safeColor(alarm.color);
-            const alarmArea = alarm.area_id ? (areas.find(a => a.area_id === alarm.area_id)?.name || alarm.area_id) : "";
+            const alarmArea = alarm.device_id ? (areas.find(a => a.device_id === alarm.device_id)?.name || alarm.device_id) : "Needs a device";
             const alarmId = this._escapeHtml(alarm.id);
             const scheduleText = this._formatSchedule(alarm.days);
             const nextText = alarm.enabled ? this._formatNextTrigger(alarm.next_trigger) : "Disabled";
@@ -1763,9 +1724,9 @@ class AlarmsPanelCard extends HTMLElement {
               </div>
 
               <div class="form-group">
-                <label for="media_player">Output Speaker (Optional)</label>
+                <label for="media_player">Speaker preference (sent to satellite)</label>
                 <select id="media_player" class="select-input">
-                  <option value="" ${this._formState.media_player === "" ? "selected" : ""}>Browser Only</option>
+                  <option value="" ${this._formState.media_player === "" ? "selected" : ""}>Use satellite speaker</option>
                   ${this._mediaPlayers
                     .map((mp) => `
                       <option value="${this._escapeHtml(mp.entity_id)}" ${this._formState.media_player === mp.entity_id ? "selected" : ""}>
@@ -1777,12 +1738,12 @@ class AlarmsPanelCard extends HTMLElement {
               </div>
 
               <div class="form-group">
-                <label for="area_id">Area (Optional)</label>
-                <select id="area_id" class="select-input">
-                  <option value="" ${this._formState.area_id === "" ? "selected" : ""}>No Area</option>
+                <label for="device_id">Satellite device</label>
+                <select id="device_id" class="select-input" required>
+                  <option value="" ${this._formState.device_id === "" ? "selected" : ""}>Select a satellite…</option>
                   ${areas
                     .map((area) => `
-                      <option value="${this._escapeHtml(area.area_id)}" ${this._formState.area_id === area.area_id ? "selected" : ""}>
+                      <option value="${this._escapeHtml(area.device_id)}" ${this._formState.device_id === area.device_id ? "selected" : ""}>
                         ${this._escapeHtml(area.name)}
                       </option>
                     `)
@@ -1807,6 +1768,10 @@ class AlarmsPanelCard extends HTMLElement {
   _setupEventListeners() {
     const shadow = this.shadowRoot;
 
+    shadow.querySelectorAll('[data-device]').forEach(button => button.addEventListener('click', () => {
+      this._selectedDevice = button.dataset.device;
+      this.render();
+    }));
     // Add alarm button
     const btnAdd = shadow.querySelector(".btn-add");
     if (btnAdd) {
@@ -1969,10 +1934,10 @@ class AlarmsPanelCard extends HTMLElement {
       });
     }
 
-    const areaSelect = shadow.getElementById("area_id");
+    const areaSelect = shadow.getElementById("device_id");
     if (areaSelect) {
       areaSelect.addEventListener("change", (e) => {
-        this._formState.area_id = e.target.value || "";
+        this._formState.device_id = e.target.value || "";
       });
     }
 
@@ -1993,5 +1958,5 @@ window.customCards.push({
   type: "alarms-panel",
   name: "Alarms Card",
   preview: true,
-  description: "A gorgeous interface to control and configure your custom alarms.",
+  description: "Manage alarms on your satellite devices.",
 });

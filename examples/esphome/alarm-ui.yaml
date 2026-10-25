@@ -1,0 +1,248 @@
+# Include as a package in an existing ESPHome node. Add your board, network,
+# API encryption and (optionally) web_server configuration in that node.
+# Replace this with the Home Assistant device registry ID, NOT the node name.
+substitutions:
+  alarm_device_id: REPLACE_WITH_HA_DEVICE_ID
+
+json:
+
+globals:
+  - id: alarm_snapshot
+    type: std::string
+    initial_value: '""'
+  - id: alarm_index
+    type: int
+    initial_value: '0'
+  - id: alarm_selected_id
+    type: std::string
+    initial_value: '""'
+  # Set this to the executing occurrence's alarm UUID in your local player.
+  - id: alarm_active_id
+    type: std::string
+    initial_value: '""'
+  - id: alarm_request_counter
+    type: int
+    initial_value: '0'
+
+api:
+  # A web_server client may also connect; the periodic HA snapshot is a fallback.
+  on_client_connected:
+    then:
+      - script.execute:
+          id: alarm_send
+          action: list
+  actions:
+    - action: alarm_payload
+      variables:
+        payload: string
+      then:
+        - lambda: |-
+            json::parse_json(payload, [&](JsonObject root) -> bool {
+              if (root["device_id"].as<std::string>() != "${alarm_device_id}") return false;
+              const auto kind = root["type"].as<std::string>();
+              if (kind == "schedule") {
+                // Cache the complete payload, not a truncated HA sensor state.
+                id(alarm_snapshot) = payload;
+                const auto count = root["configured_alarms"].as<JsonArray>().size();
+                id(alarm_ui_status).publish_state(std::to_string(count) + " alarms; press Next to select");
+                // Playback adapter: atomically replace the future queue from
+                // root["alarms"]. Use timestamp/occurrence_id for local execution.
+                // Do not overwrite unsaved editor fields on periodic refreshes.
+              } else if (kind == "result") {
+                if (root["success"].as<bool>()) {
+                  id(alarm_ui_status).publish_state("OK: " + root["request_id"].as<std::string>());
+                  if (root["action"].as<std::string>() == "create")
+                    id(alarm_selected_id) = root["alarm_id"].as<std::string>();
+                } else {
+                  id(alarm_ui_status).publish_state("Error: " + root["error"].as<std::string>());
+                }
+              } else if (kind == "command") {
+                // Playback adapter: apply snooze/dismiss to the matching alarm.
+                // Commands are idempotent; they can echo a device state report.
+                ESP_LOGI("alarms", "Playback command: %s", payload.c_str());
+              }
+              return true;
+            });
+
+text_sensor:
+  - platform: template
+    id: alarm_ui_status
+    name: Alarm editor status
+  - platform: template
+    id: alarm_selected_status
+    name: Selected alarm
+
+text:
+  - platform: template
+    id: alarm_edit_name
+    name: Alarm label
+    mode: text
+    optimistic: true
+    initial_value: Wake up
+    max_length: 80
+  - platform: template
+    id: alarm_edit_time
+    name: Alarm time HH-MM
+    mode: text
+    optimistic: true
+    initial_value: '07:00'
+    max_length: 8
+
+number:
+  - platform: template
+    id: alarm_edit_days
+    name: Alarm repeat day mask
+    optimistic: true
+    min_value: 0
+    max_value: 127
+    step: 1
+    initial_value: 31  # Monday-Friday. 0 = one-off, 127 = every day.
+  - platform: template
+    id: alarm_edit_snooze
+    name: Alarm snooze minutes
+    optimistic: true
+    min_value: 1
+    max_value: 60
+    step: 1
+    initial_value: 5
+
+script:
+  # Bind this script to LVGL buttons or other local inputs as needed.
+  - id: alarm_send
+    mode: queued
+    parameters:
+      action: string
+    then:
+      - homeassistant.action:
+          action: alarms.satellite_command
+          data:
+            device_id: ${alarm_device_id}
+            command: !lambda |-
+              JsonDocument doc;
+              doc["action"] = action;
+              doc["request_id"] = std::to_string(millis()) + "-" + std::to_string(++id(alarm_request_counter));
+              if (action != "create" && action != "list" && action != "sync")
+                doc["alarm_id"] = id(alarm_selected_id);
+              if (action == "create" || action == "update") {
+                auto fields = doc["fields"].to<JsonObject>();
+                fields["name"] = id(alarm_edit_name).state;
+                fields["time"] = id(alarm_edit_time).state;
+                fields["snooze_duration"] = int(id(alarm_edit_snooze).state);
+                auto days = fields["days"].to<JsonArray>();
+                const int mask = int(id(alarm_edit_days).state);
+                for (int day = 0; day < 7; ++day)
+                  if (mask & (1 << day)) days.add(day);
+              }
+              if (action == "snooze") doc["duration"] = int(id(alarm_edit_snooze).state);
+              std::string result;
+              serializeJson(doc, result);
+              return result;
+  # Physical playback controls always target the active occurrence, not the editor.
+  - id: alarm_playback_control
+    mode: queued
+    parameters:
+      action: string
+    then:
+      - homeassistant.action:
+          action: alarms.satellite_command
+          data:
+            device_id: ${alarm_device_id}
+            command: !lambda |-
+              JsonDocument doc;
+              doc["action"] = action;
+              doc["request_id"] = std::to_string(millis()) + "-" + std::to_string(++id(alarm_request_counter));
+              doc["alarm_id"] = id(alarm_active_id);
+              if (action == "snooze") doc["duration"] = int(id(alarm_edit_snooze).state);
+              std::string result;
+              serializeJson(doc, result);
+              return result;
+  - id: alarm_next
+    then:
+      - lambda: |-
+          if (id(alarm_snapshot).empty()) return;
+          json::parse_json(id(alarm_snapshot), [&](JsonObject root) -> bool {
+            const auto alarms = root["configured_alarms"].as<JsonArray>();
+            if (alarms.size() == 0) {
+              id(alarm_selected_id).clear();
+              id(alarm_selected_status).publish_state("No alarms; fill fields and Create");
+              return true;
+            }
+            id(alarm_index) %= int(alarms.size());
+            const auto alarm = alarms[id(alarm_index)].as<JsonObject>();
+            id(alarm_selected_id) = alarm["id"].as<std::string>();
+            id(alarm_edit_name).publish_state(alarm["name"].as<std::string>());
+            id(alarm_edit_time).publish_state(alarm["time"].as<std::string>().substr(0, 5));
+            int mask = 0;
+            for (auto day : alarm["days"].as<JsonArray>()) mask |= 1 << day.as<int>();
+            id(alarm_edit_days).publish_state(mask);
+            id(alarm_edit_snooze).publish_state(alarm["snooze_duration"].as<int>());
+            id(alarm_selected_status).publish_state(alarm["name"].as<std::string>() + " / " + alarm["status"].as<std::string>());
+            ++id(alarm_index);
+            return true;
+          });
+
+button:
+  - platform: template
+    name: Alarm Next
+    on_press:
+      - script.execute: alarm_next
+  - platform: template
+    name: Alarm Refresh
+    on_press:
+      - script.execute:
+          id: alarm_send
+          action: list
+  - platform: template
+    name: Alarm Create
+    on_press:
+      - script.execute:
+          id: alarm_send
+          action: create
+  - platform: template
+    name: Alarm Save
+    on_press:
+      - script.execute:
+          id: alarm_send
+          action: update
+  - platform: template
+    name: Alarm Delete
+    on_press:
+      - script.execute:
+          id: alarm_send
+          action: delete
+  - platform: template
+    name: Alarm Enable
+    on_press:
+      - script.execute:
+          id: alarm_send
+          action: enable
+  - platform: template
+    name: Alarm Disable
+    on_press:
+      - script.execute:
+          id: alarm_send
+          action: disable
+  - platform: template
+    name: Alarm Skip next
+    on_press:
+      - script.execute:
+          id: alarm_send
+          action: skip_next
+  - platform: template
+    name: Alarm Unskip
+    on_press:
+      - script.execute:
+          id: alarm_send
+          action: unskip_next
+  - platform: template
+    name: Alarm Snooze
+    on_press:
+      - script.execute:
+          id: alarm_playback_control
+          action: snooze
+  - platform: template
+    name: Alarm Dismiss
+    on_press:
+      - script.execute:
+          id: alarm_playback_control
+          action: dismiss

@@ -1,427 +1,285 @@
-"""Tests for the Alarms Data Coordinator."""
+"""Behavioral regression tests for satellite storage and Assist isolation."""
 import datetime
+from types import SimpleNamespace
+from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, MagicMock, patch
-import pytest
 
-from custom_components.alarms.const import (
-    STATE_DISABLED,
-    STATE_IDLE,
-    STATE_RINGING,
-    STATE_SILENCED,
-    STATE_SNOOZED,
-)
 from custom_components.alarms.coordinator import AlarmsCoordinator
+from custom_components.alarms import (
+    AlarmsCreateIntentHandler, AlarmsDeleteIntentHandler,
+    AlarmsUpdateIntentHandler, AlarmsSnoozeIntentHandler,
+    alarms_for_intent_device,
+)
+from custom_components.alarms.const import DOMAIN
+from homeassistant.util import dt as dt_util
 
 
-@pytest.fixture
-def mock_hass() -> MagicMock:
-    """Create a mock Home Assistant instance."""
-    hass = MagicMock()
-    hass.config.time_zone = "Europe/London"
-    hass.bus = MagicMock()
-    hass.bus.async_fire = MagicMock()
-    hass.services = MagicMock()
-    hass.services.async_call = AsyncMock()
-    return hass
+class SatelliteTests(IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.hass = MagicMock()
+        self.hass.config.time_zone = "Europe/London"
+        self.store = MagicMock(async_load=AsyncMock(return_value={}), async_save=AsyncMock())
+        self.patch = patch("custom_components.alarms.coordinator.Store", return_value=self.store)
+        self.patch.start()
+        self.coordinator = AlarmsCoordinator(self.hass, "test")
+        self.hass.data = {DOMAIN: {"test": self.coordinator}}
+        await self.coordinator.async_setup()
 
+    async def asyncTearDown(self):
+        self.patch.stop()
 
-@pytest.fixture
-def mock_store() -> MagicMock:
-    """Mock the HA storage Store class."""
-    store = MagicMock()
-    store.async_load = AsyncMock(return_value={})
-    store.async_save = AsyncMock()
-    return store
-
-
-@pytest.mark.asyncio
-async def test_coordinator_setup_and_create(mock_hass: MagicMock, mock_store: MagicMock) -> None:
-    """Test setting up coordinator and creating a new alarm."""
-    with patch("custom_components.alarms.coordinator.Store", return_value=mock_store):
-        coordinator = AlarmsCoordinator(mock_hass, "test_entry")
-        
-        # Initial setup
-        await coordinator.async_setup()
-        assert coordinator.alarms == {}
-        
-        # Create alarm
-        alarm_time = datetime.time(7, 0, 0)
-        alarm_id = await coordinator.async_create_alarm(
-            name="Morning Wakeup",
-            time_val=alarm_time,
-            color="#FF5733",
-            sound="chime.wav",
-            days=[0, 1, 2, 3, 4],  # Weekdays
-            snooze_duration=10,
-            area_id="bedroom",
-        )
-        
-        # Verify alarm entry
-        assert alarm_id in coordinator.alarms
-        alarm = coordinator.alarms[alarm_id]
-        assert alarm["name"] == "Morning Wakeup"
-        assert alarm["time"] == alarm_time
-        assert alarm["color"] == "#FF5733"
-        assert alarm["sound"] == "chime.wav"
-        assert alarm["days"] == [0, 1, 2, 3, 4]
-        assert alarm["snooze_duration"] == 10
-        assert alarm["enabled"] is True
-        assert alarm["status"] == STATE_IDLE
-        assert alarm["next_trigger"] is not None
-        assert alarm["area_id"] == "bedroom"
-        
-        # Verify storage save was called
-        mock_store.async_save.assert_called_once()
-        
-        # Verify WS update event was fired
-        mock_hass.bus.async_fire.assert_any_call(
-            "alarms_updated", {"action": "create", "alarm_id": alarm_id}
+    async def create(self, device="satellite-a", minute=1, days=None):
+        now = dt_util.now()
+        return await self.coordinator.async_create_alarm(
+            "Wake up", (now + datetime.timedelta(minutes=minute)).time(),
+            device_id=device, days=days,
         )
 
+    def request(self, device, slots):
+        response = MagicMock()
+        request = SimpleNamespace(hass=self.hass, device_id=device,
+                                  slots={key: {"value": value} for key, value in slots.items()},
+                                  create_response=lambda: response)
+        return request, response
 
-@pytest.mark.asyncio
-async def test_alarm_lifecycle(mock_hass: MagicMock, mock_store: MagicMock) -> None:
-    """Test entire lifecycle transitions: trigger -> snooze -> dismiss."""
-    with patch("custom_components.alarms.coordinator.Store", return_value=mock_store):
-        coordinator = AlarmsCoordinator(mock_hass, "test_entry")
-        await coordinator.async_setup()
-        
-        # 1. Create alarm
-        alarm_id = await coordinator.async_create_alarm(
-            name="Test Alarm",
-            time_val=datetime.time(8, 0, 0),
-            days=[],  # One-off
+    async def test_queue_is_device_owned_and_includes_every_alarm_in_two_hours(self):
+        for minute in range(1, 9):
+            await self.create(minute=minute)
+        await self.create(device="satellite-b")
+        queue = self.coordinator.satellite_schedule("satellite-a")["alarms"]
+        self.assertEqual(len(queue), 8)
+        self.assertEqual(sorted(a["timestamp"] for a in queue), [a["timestamp"] for a in queue])
+        self.assertTrue(all(a["device_id"] == "satellite-a" for a in queue))
+        self.assertEqual(len(self.coordinator.satellite_schedule("satellite-b")["alarms"]), 1)
+
+    async def test_repeating_occurrences_fill_five_and_skip_only_one(self):
+        alarm_id = await self.create(days=list(range(7)))
+        queue = self.coordinator.satellite_schedule("satellite-a")["alarms"]
+        self.assertEqual(len(queue), 5)
+        self.assertEqual(len({a["occurrence_id"] for a in queue}), 5)
+        await self.coordinator.async_skip_next(alarm_id)
+        skipped = self.coordinator.satellite_schedule("satellite-a")["alarms"]
+        self.assertGreater(skipped[0]["timestamp"], queue[0]["timestamp"])
+        await self.coordinator.async_unskip_next(alarm_id)
+        self.assertEqual(self.coordinator.satellite_schedule("satellite-a")["alarms"][0]["timestamp"], queue[0]["timestamp"])
+
+    async def test_delete_disable_and_reassignment_publish_empty_queues(self):
+        alarm_id = await self.create()
+        await self.coordinator.async_update_alarm(alarm_id, device_id="satellite-b")
+        self.assertEqual(self.coordinator.satellite_schedule("satellite-a")["alarms"], [])
+        await self.coordinator.async_toggle_alarm(alarm_id, False)
+        self.assertEqual(self.coordinator.satellite_schedule("satellite-b")["alarms"], [])
+        await self.coordinator.async_delete_alarm(alarm_id)
+        self.hass.bus.async_fire.assert_any_call("alarms_schedule", self.coordinator.satellite_schedule("satellite-b"))
+
+    async def test_time_advances_without_central_playback_or_ringing(self):
+        alarm_id = await self.create(days=list(range(7)))
+        await self.coordinator.async_advance_alarm(alarm_id)
+        self.assertEqual(self.coordinator.alarms[alarm_id]["status"], "idle")
+        self.hass.services.async_call.assert_not_called()
+        self.assertFalse(any(call.args[0] == "alarms_triggered" for call in self.hass.bus.async_fire.call_args_list))
+
+    async def test_remote_lifecycle_snooze_and_dismiss(self):
+        alarm_id = await self.create()
+        await self.coordinator.async_trigger_alarm(alarm_id)
+        self.assertEqual(self.coordinator.alarms[alarm_id]["status"], "ringing")
+        self.hass.services.async_call.assert_not_called()
+        await self.coordinator.async_snooze_alarm(alarm_id, 9)
+        self.assertEqual(self.coordinator.alarms[alarm_id]["status"], "snoozed")
+        self.hass.bus.async_fire.assert_any_call("alarms_command", {
+            "type": "command", "device_id": "satellite-a", "alarm_id": alarm_id, "action": "snooze", "duration_minutes": 9})
+        await self.coordinator.async_dismiss_alarm(alarm_id)
+        self.assertFalse(self.coordinator.alarms[alarm_id]["enabled"])
+        self.assertEqual(self.coordinator.satellite_schedule("satellite-a")["alarms"], [])
+
+    async def test_voice_never_crosses_device_even_with_explicit_alarm_id(self):
+        a = await self.create()
+        b = await self.create(device="satellite-b")
+        for handler, slots in ((AlarmsDeleteIntentHandler(), {"alarm_id": b}),
+                               (AlarmsUpdateIntentHandler(), {"alarm_id": b, "new_name": "Changed"})):
+            request, response = self.request("satellite-a", slots)
+            await handler.async_handle(request)
+            self.assertIn(b, self.coordinator.alarms)
+            self.assertEqual(self.coordinator.alarms[b]["name"], "Wake up")
+        request, _ = self.request("satellite-a", {"name": "Wake up"})
+        await AlarmsDeleteIntentHandler().async_handle(request)
+        self.assertNotIn(a, self.coordinator.alarms)
+        self.assertIn(b, self.coordinator.alarms)
+        request, _ = self.request(None, {})
+        self.assertEqual(alarms_for_intent_device(request, list(self.coordinator.alarms.values())), [])
+
+    async def test_create_requires_device_and_uses_requesting_satellite(self):
+        request, _ = self.request(None, {"time": "07:00"})
+        await AlarmsCreateIntentHandler().async_handle(request)
+        self.assertEqual(self.coordinator.alarms, {})
+        request, _ = self.request("satellite-a", {"time": "07:00"})
+        await AlarmsCreateIntentHandler().async_handle(request)
+        self.assertEqual(next(iter(self.coordinator.alarms.values()))["device_id"], "satellite-a")
+
+    async def test_legacy_storage_is_unassigned_and_never_auto_rings(self):
+        alarm_id = await self.create()
+        stored = self.coordinator.serialize_alarms()
+        del stored[alarm_id]["device_id"]
+        self.store.async_load.return_value = stored
+        restored = AlarmsCoordinator(self.hass, "test")
+        await restored.async_setup()
+        self.assertIsNone(restored.alarms[alarm_id]["device_id"])
+        self.assertEqual(restored._timers, {})
+        self.assertEqual(restored.satellite_schedule("satellite-a")["alarms"], [])
+
+    async def test_preferences_and_repeat_edits_survive_storage_roundtrip(self):
+        alarm_id = await self.create(days=[0, 1, 2, 3, 4])
+        await self.coordinator.async_update_alarm(
+            alarm_id, name="School", time_val=datetime.time(7, 30),
+            color="#123456", sound="chime.wav", snooze_duration=10,
+            media_player="media_player.bedside", days=[5, 6],
         )
-        
-        # 2. Trigger alarm
-        await coordinator.async_trigger_alarm(alarm_id)
-        assert coordinator.alarms[alarm_id]["status"] == STATE_RINGING
-        
-        # Verify event fired
-        mock_hass.bus.async_fire.assert_any_call(
-            "alarms_triggered",
-            {
-                "alarm_id": alarm_id,
-                "name": "Test Alarm",
-                "color": "#3498db",
-                "sound": "digital.wav",
-                "entity_id": "switch.test_alarm_enabled",
-                "media_player": None,
-                "area_id": None,
-            },
-        )
-        
-        # 3. Snooze alarm
-        await coordinator.async_snooze_alarm(alarm_id, duration_minutes=5)
-        assert coordinator.alarms[alarm_id]["status"] == STATE_SNOOZED
-        assert coordinator.alarms[alarm_id]["snoozed_until"] is not None
-        
-        # Verify snooze event
-        mock_hass.bus.async_fire.assert_any_call(
-            "alarms_snoozed",
-            {
-                "alarm_id": alarm_id,
-                "name": "Test Alarm",
-                "snooze_until": coordinator.alarms[alarm_id]["snoozed_until"].isoformat(),
-                "duration_minutes": 5,
-            },
-        )
-        
-        # 4. Dismiss alarm (since it is a one-off, it should disable itself)
-        await coordinator.async_dismiss_alarm(alarm_id)
-        assert coordinator.alarms[alarm_id]["status"] == STATE_DISABLED
-        assert coordinator.alarms[alarm_id]["enabled"] is False
-        assert coordinator.alarms[alarm_id]["snoozed_until"] is None
-        assert coordinator.alarms[alarm_id]["next_trigger"] is None
-        
-        # Verify dismiss event
-        mock_hass.bus.async_fire.assert_any_call(
-            "alarms_dismissed",
-            {"alarm_id": alarm_id, "name": "Test Alarm"},
-        )
+        self.store.async_load.return_value = self.coordinator.serialize_alarms()
+        restored = AlarmsCoordinator(self.hass, "test")
+        await restored.async_setup()
+        alarm = restored.alarms[alarm_id]
+        self.assertEqual((alarm["name"], alarm["time"], alarm["days"]), ("School", datetime.time(7, 30), [5, 6]))
+        self.assertEqual((alarm["sound"], alarm["color"], alarm["snooze_duration"], alarm["media_player"]),
+                         ("chime.wav", "#123456", 10, "media_player.bedside"))
+        self.assertEqual(alarm["device_id"], "satellite-a")
 
+    async def test_voice_snooze_isolated_and_no_context_has_no_effect(self):
+        a = await self.create()
+        b = await self.create(device="satellite-b")
+        await self.coordinator.async_trigger_alarm(a)
+        await self.coordinator.async_trigger_alarm(b)
+        request, _ = self.request(None, {})
+        await AlarmsSnoozeIntentHandler().async_handle(request)
+        self.assertEqual(self.coordinator.alarms[a]["status"], "ringing")
+        request, _ = self.request("satellite-a", {})
+        await AlarmsSnoozeIntentHandler().async_handle(request)
+        self.assertEqual(self.coordinator.alarms[a]["status"], "snoozed")
+        self.assertEqual(self.coordinator.alarms[b]["status"], "ringing")
 
-@pytest.mark.asyncio
-async def test_skip_next_alarm(mock_hass: MagicMock, mock_store: MagicMock) -> None:
-    """Test skipping and unskipping upcoming alarms."""
-    with patch("custom_components.alarms.coordinator.Store", return_value=mock_store):
-        coordinator = AlarmsCoordinator(mock_hass, "test_entry")
-        await coordinator.async_setup()
-        
-        alarm_id = await coordinator.async_create_alarm(
-            name="Weekly Alarm",
-            time_val=datetime.time(8, 0, 0),
-            days=[0],  # Mondays
-        )
-        
-        # Skip next occurrence
-        await coordinator.async_skip_next(alarm_id)
-        assert coordinator.alarms[alarm_id]["silenced"] is True
-        assert coordinator.alarms[alarm_id]["status"] == STATE_SILENCED
-        
-        # Unskip
-        await coordinator.async_unskip_next(alarm_id)
-        assert coordinator.alarms[alarm_id]["silenced"] is False
-        assert coordinator.alarms[alarm_id]["status"] == STATE_IDLE
+    async def test_empty_and_finite_queues_and_invalid_devices(self):
+        self.assertEqual(self.coordinator.satellite_schedule("satellite-a")["alarms"], [])
+        await self.create(minute=180)
+        self.assertEqual(len(self.coordinator.satellite_schedule("satellite-a")["alarms"]), 1)
+        with self.assertRaises(ValueError):
+            await self.create(device=None)
 
+    async def test_five_future_alarms_outside_horizon(self):
+        for minute in range(180, 190):
+            await self.create(minute=minute)
+        queue = self.coordinator.satellite_schedule("satellite-a")["alarms"]
+        self.assertEqual(len(queue), 5)
+        self.assertTrue(all(a["timestamp"] > (dt_util.now() + datetime.timedelta(hours=2)).timestamp() for a in queue))
 
-@pytest.mark.asyncio
-async def test_global_next_alarm(mock_hass: MagicMock, mock_store: MagicMock) -> None:
-    """Test retrieving the global next upcoming alarm."""
-    with patch("custom_components.alarms.coordinator.Store", return_value=mock_store):
-        coordinator = AlarmsCoordinator(mock_hass, "test_entry")
-        await coordinator.async_setup()
+    async def test_remote_report_rejects_foreign_alarm_and_accepts_own(self):
+        from custom_components.alarms import ws_satellite_report
+        alarm_id = await self.create()
+        connection = MagicMock()
+        await ws_satellite_report(self.hass, connection, {
+            "id": 1, "device_id": "satellite-b", "alarm_id": alarm_id, "status": "ringing"})
+        connection.send_error.assert_called_once()
+        self.assertEqual(self.coordinator.alarms[alarm_id]["status"], "idle")
+        await ws_satellite_report(self.hass, connection, {
+            "id": 2, "device_id": "satellite-a", "alarm_id": alarm_id, "status": "ringing"})
+        self.assertEqual(self.coordinator.alarms[alarm_id]["status"], "ringing")
+        connection.send_result.assert_called_once_with(2, {"success": True})
 
-        # Create 3 alarms scheduled at different times
-        # Alarm 1: 09:00:00 (latest)
-        id_1 = await coordinator.async_create_alarm(
-            name="Late Alarm",
-            time_val=datetime.time(9, 0, 0),
-            days=[0, 1, 2, 3, 4, 5, 6],
-        )
-        # Alarm 2: 07:00:00 (earliest)
-        id_2 = await coordinator.async_create_alarm(
-            name="Early Alarm",
-            time_val=datetime.time(7, 0, 0),
-            days=[0, 1, 2, 3, 4, 5, 6],
-        )
-        # Alarm 3: 08:00:00 (middle)
-        id_3 = await coordinator.async_create_alarm(
-            name="Middle Alarm",
-            time_val=datetime.time(8, 0, 0),
-            days=[0, 1, 2, 3, 4, 5, 6],
-        )
+    async def test_subscription_sends_initial_snapshot_filters_and_unsubscribes(self):
+        from custom_components.alarms import ws_satellite_subscribe
+        await self.create()
+        connection = MagicMock(subscriptions={})
+        ws_satellite_subscribe(self.hass, connection, {"id": 1, "device_id": "satellite-a"})
+        connection.send_result.assert_called_once_with(1)
+        self.assertEqual(connection.send_message.call_count, 1)
+        listeners = self.hass.bus.async_listen.call_args_list
+        forward = next(call.args[1] for call in listeners if call.args[0] == "alarms_schedule")
+        forward(SimpleNamespace(data={"device_id": "satellite-b"}))
+        self.assertEqual(connection.send_message.call_count, 1)
+        forward(SimpleNamespace(data=self.coordinator.satellite_schedule("satellite-a")))
+        self.assertEqual(connection.send_message.call_count, 2)
+        connection.subscriptions[1]()
+        self.hass.bus.async_listen.return_value.assert_called()
 
-        # Get next upcoming alarm, should be Alarm 2 (07:00:00)
-        next_alarm = coordinator.get_next_upcoming_alarm()
-        assert next_alarm is not None
-        assert next_alarm["id"] == id_2
-        assert next_alarm["name"] == "Early Alarm"
+    async def test_device_ui_commands_create_edit_toggle_and_delete(self):
+        from custom_components.alarms.satellite import async_dispatch_command
+        result = await async_dispatch_command(self.coordinator, "satellite-a", {
+            "request_id": "screen-1", "action": "create",
+            "fields": {"name": "Screen alarm", "time": "07:30", "days": [4, 0, 0]}})
+        self.assertTrue(result["success"])
+        alarm_id = result["alarm_id"]
+        self.assertEqual(result["request_id"], "screen-1")
+        self.assertEqual(self.coordinator.alarms[alarm_id]["days"], [0, 4])
+        for action in ("disable", "enable", "skip_next", "unskip_next"):
+            result = await async_dispatch_command(self.coordinator, "satellite-a", {
+                "action": action, "alarm_id": alarm_id})
+            self.assertTrue(result["success"], result)
+        result = await async_dispatch_command(self.coordinator, "satellite-a", {
+            "action": "update", "alarm_id": alarm_id, "fields": {"time": "08:15", "sound": "chime.wav"}})
+        self.assertTrue(result["success"])
+        self.assertEqual(self.coordinator.alarms[alarm_id]["time"], datetime.time(8, 15))
+        result = await async_dispatch_command(self.coordinator, "satellite-a", {
+            "action": "delete", "alarm_id": alarm_id})
+        self.assertTrue(result["success"])
+        self.assertNotIn(alarm_id, self.coordinator.alarms)
 
-        # Disable the earliest alarm
-        await coordinator.async_toggle_alarm(id_2, False)
+    async def test_device_ui_rejects_foreign_targets_reassignment_and_bad_fields(self):
+        from custom_components.alarms.satellite import async_dispatch_command
+        alarm_id = await self.create(device="satellite-b")
+        for command in (
+            {"action": "delete", "alarm_id": alarm_id},
+            {"action": "disable", "alarm_id": alarm_id},
+            {"action": "create", "fields": {"name": "Bad", "time": "25:00"}},
+            {"action": "create", "fields": {"name": "Bad", "time": "07:00", "device_id": "satellite-b"}},
+            {"action": "create", "fields": {"name": "Bad", "time": "07:00", "days": [7]}},
+            {"action": "create", "fields": {"name": "Bad", "time": "07:00", "snooze_duration": 0}},
+            {"action": "delete"},
+            {"action": "unknown"},
+        ):
+            result = await async_dispatch_command(self.coordinator, "satellite-a", {**command, "request_id": "bad-1"})
+            self.assertFalse(result["success"], command)
+            self.assertEqual(result["request_id"], "bad-1")
+            self.assertIn("error", result)
+        self.assertEqual(len(self.coordinator.alarms), 1)
+        self.assertTrue(self.coordinator.alarms[alarm_id]["enabled"])
 
-        # Get next upcoming alarm, should now be Alarm 3 (08:00:00)
-        next_alarm = coordinator.get_next_upcoming_alarm()
-        assert next_alarm is not None
-        assert next_alarm["id"] == id_3
-        assert next_alarm["name"] == "Middle Alarm"
+    async def test_device_ui_json_errors_and_read_refresh_acknowledgements(self):
+        from custom_components.alarms.satellite import async_dispatch_command
+        for command in ('{', '[]', 'null'):
+            result = await async_dispatch_command(self.coordinator, "satellite-a", command)
+            self.assertFalse(result["success"])
+        for command in ('{"action":"list","request_id":"refresh-1"}', '{"action":"sync"}'):
+            result = await async_dispatch_command(self.coordinator, "satellite-a", command)
+            self.assertTrue(result["success"])
+            self.hass.bus.async_fire.assert_any_call("alarms_command_result", result)
+        self.hass.bus.async_fire.assert_any_call("alarms_schedule", self.coordinator.satellite_schedule("satellite-a"))
 
+    async def test_device_ui_websocket_command_ack_and_playback_controls(self):
+        from custom_components.alarms import ws_satellite_command
+        from custom_components.alarms.satellite import async_dispatch_command
+        connection = MagicMock()
+        await ws_satellite_command(self.hass, connection, {
+            "id": 10, "device_id": "satellite-a",
+            "command": '{"action":"create","request_id":"touch-1","fields":{"name":"Touch","time":"07:00"}}'})
+        result = connection.send_result.call_args.args[1]
+        self.assertTrue(result["success"])
+        alarm_id = result["alarm_id"]
+        await self.coordinator.async_trigger_alarm(alarm_id)
+        result = await async_dispatch_command(self.coordinator, "satellite-a", {
+            "action": "snooze", "alarm_id": alarm_id, "duration": 10})
+        self.assertTrue(result["success"])
+        self.assertEqual(self.coordinator.alarms[alarm_id]["status"], "snoozed")
+        result = await async_dispatch_command(self.coordinator, "satellite-a", {
+            "action": "dismiss", "alarm_id": alarm_id})
+        self.assertTrue(result["success"])
+        self.assertFalse(self.coordinator.alarms[alarm_id]["enabled"])
 
-@pytest.mark.asyncio
-async def test_silent_alarm(mock_hass: MagicMock, mock_store: MagicMock) -> None:
-    """Test that a silent alarm triggers events but does not call play_media."""
-    with patch("custom_components.alarms.coordinator.Store", return_value=mock_store):
-        coordinator = AlarmsCoordinator(mock_hass, "test_entry")
-        await coordinator.async_setup()
-
-        # Create alarm with silent.wav and a speaker configured
-        alarm_id = await coordinator.async_create_alarm(
-            name="Silent Alert",
-            time_val=datetime.time(8, 0, 0),
-            sound="silent.wav",
-            media_player="media_player.bedroom_speaker",
-        )
-
-        # Trigger alarm
-        await coordinator.async_trigger_alarm(alarm_id)
-        assert coordinator.alarms[alarm_id]["status"] == STATE_RINGING
-
-        # Verify triggering event was fired
-        mock_hass.bus.async_fire.assert_any_call(
-            "alarms_triggered",
-            {
-                "alarm_id": alarm_id,
-                "name": "Silent Alert",
-                "color": "#3498db",
-                "sound": "silent.wav",
-                "entity_id": "switch.silent_alert_enabled",
-                "media_player": "media_player.bedroom_speaker",
-                "area_id": None,
-            },
-        )
-
-        # Verify that play_media service was NOT called on media_player (because sound is silent.wav)
-        mock_hass.services.async_call.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_update_alarm(mock_hass: MagicMock, mock_store: MagicMock) -> None:
-    """Test updating alarm properties."""
-    with patch("custom_components.alarms.coordinator.Store", return_value=mock_store):
-        coordinator = AlarmsCoordinator(mock_hass, "test_entry")
-        await coordinator.async_setup()
-
-        # 1. Create alarm
-        alarm_id = await coordinator.async_create_alarm(
-            name="Original Alarm",
-            time_val=datetime.time(7, 0, 0),
-            color="#111111",
-            sound="digital.wav",
-            days=[0, 1],
-            snooze_duration=5,
-            media_player="media_player.original",
-        )
-
-        # 2. Update alarm
-        new_time = datetime.time(8, 30, 0)
-        await coordinator.async_update_alarm(
-            alarm_id=alarm_id,
-            name="Updated Alarm",
-            time_val=new_time,
-            color="#222222",
-            sound="chime.wav",
-            days=[0, 1, 2],
-            snooze_duration=10,
-            media_player="media_player.updated",
-            area_id="living_room",
-        )
- 
-        # 3. Verify modifications
-        alarm = coordinator.alarms[alarm_id]
-        assert alarm["name"] == "Updated Alarm"
-        assert alarm["time"] == new_time
-        assert alarm["color"] == "#222222"
-        assert alarm["sound"] == "chime.wav"
-        assert alarm["days"] == [0, 1, 2]
-        assert alarm["snooze_duration"] == 10
-        assert alarm["media_player"] == "media_player.updated"
-        assert alarm["area_id"] == "living_room"
- 
-        # Verify signals/events
-        mock_hass.bus.async_fire.assert_any_call(
-            "alarms_updated", {"action": "update", "alarm_id": alarm_id}
-        )
-
-
-@pytest.mark.asyncio
-async def test_next_alarm_by_area(mock_hass: MagicMock, mock_store: MagicMock) -> None:
-    """Test next alarms grouped by area."""
-    with patch("custom_components.alarms.coordinator.Store", return_value=mock_store):
-        coordinator = AlarmsCoordinator(mock_hass, "test_entry")
-        await coordinator.async_setup()
-
-        # Create two alarms in different areas:
-        # Alarm 1: 08:00 in living_room
-        id_lr = await coordinator.async_create_alarm(
-            name="Coffee Time",
-            time_val=datetime.time(8, 0, 0),
-            area_id="living_room",
-        )
-        # Alarm 2: 07:00 in bedroom
-        id_br = await coordinator.async_create_alarm(
-            name="Wake Up",
-            time_val=datetime.time(7, 0, 0),
-            area_id="bedroom",
-        )
-
-        # Import sensors
-        from custom_components.alarms.sensor import AlarmsNextAlarmSensor, AlarmsSystemSensor
-
-        # Mock the area registry in hass
-        mock_area_reg = MagicMock()
-        mock_area_bedroom = MagicMock(name="bedroom")
-        mock_area_bedroom.name = "Bedroom"
-        mock_area_living = MagicMock(name="living_room")
-        mock_area_living.name = "Living Room"
-        mock_area_reg.areas = {
-            "bedroom": mock_area_bedroom,
-            "living_room": mock_area_living,
-        }
-
-        # Mock ar.async_get to return our mocked registry
-        with patch("homeassistant.helpers.area_registry.async_get", return_value=mock_area_reg):
-            next_alarm_sensor = AlarmsNextAlarmSensor(coordinator)
-            next_alarm_sensor.hass = mock_hass
-            
-            # The absolute next alarm should be the bedroom one (07:00:00)
-            assert next_alarm_sensor.native_value is not None
-            assert next_alarm_sensor.native_value == coordinator.alarms[id_br]["next_trigger"]
-
-            attrs = next_alarm_sensor.extra_state_attributes
-            assert attrs is not None
-            assert attrs["absolute_next_alarm"]["alarm_id"] == id_br
-            assert attrs["absolute_next_alarm"]["area_name"] == "Bedroom"
-            
-            # Check next by area breakdown
-            assert "bedroom" in attrs["next_by_area"]
-            assert attrs["next_by_area"]["bedroom"]["alarm_id"] == id_br
-            assert attrs["next_by_area"]["bedroom"]["area_name"] == "Bedroom"
-
-            assert "living_room" in attrs["next_by_area"]
-            assert attrs["next_by_area"]["living_room"]["alarm_id"] == id_lr
-            assert attrs["next_by_area"]["living_room"]["area_name"] == "Living Room"
-
-            # Check AlarmsSystemSensor attributes
-            system_sensor = AlarmsSystemSensor(coordinator)
-            system_sensor.hass = mock_hass
-            sys_attrs = system_sensor.extra_state_attributes
-            assert sys_attrs["next_upcoming_alarm_area_id"] == "bedroom"
-            assert sys_attrs["next_upcoming_alarm_area_name"] == "Bedroom"
-            assert "bedroom" in sys_attrs["next_upcoming_alarm_by_area"]
-
-
-@pytest.mark.asyncio
-async def test_area_validation_and_correction(mock_hass: MagicMock, mock_store: MagicMock) -> None:
-    """Test validation and correction of alarm areas/locations."""
-    with patch("custom_components.alarms.coordinator.Store", return_value=mock_store):
-        coordinator = AlarmsCoordinator(mock_hass, "test_entry")
-        await coordinator.async_setup()
-
-        # Mock the area registry in hass
-        mock_area_reg = MagicMock()
-        mock_area_bedroom = MagicMock()
-        mock_area_bedroom.name = "Master Bedroom"
-        mock_area_bedroom.id = "bedroom"
-        mock_area_living = MagicMock()
-        mock_area_living.name = "Living Room"
-        mock_area_living.id = "living_room"
-        mock_area_reg.areas = {
-            "bedroom": mock_area_bedroom,
-            "living_room": mock_area_living,
-        }
-
-        with patch("homeassistant.helpers.area_registry.async_get", return_value=mock_area_reg):
-            # 1. Test correction of underscore in "master_bedroom" to "bedroom"
-            alarm_id = await coordinator.async_create_alarm(
-                name="Test Alarm 1",
-                time_val=datetime.time(8, 0, 0),
-                area_id="master_bedroom",
-            )
-            assert coordinator.alarms[alarm_id]["area_id"] == "bedroom"
-
-            # 2. Test exact match by name: "Living Room"
-            alarm_id_2 = await coordinator.async_create_alarm(
-                name="Test Alarm 2",
-                time_val=datetime.time(8, 0, 0),
-                area_id="Living Room",
-            )
-            assert coordinator.alarms[alarm_id_2]["area_id"] == "living_room"
-
-            # 3. Test exact match by ID: "living_room"
-            await coordinator.async_update_alarm(
-                alarm_id=alarm_id_2,
-                area_id="living_room"
-            )
-            assert coordinator.alarms[alarm_id_2]["area_id"] == "living_room"
-
-            # 4. Test "None", "clear", "no area", "" unsetting the area to None
-            for unset_val in ("None", "clear", "no area", "", None):
-                await coordinator.async_update_alarm(
-                    alarm_id=alarm_id,
-                    area_id=unset_val
-                )
-                assert coordinator.alarms[alarm_id]["area_id"] is None
-
-            # 5. Test invalid area raises ValueError
-            try:
-                await coordinator.async_create_alarm(
-                    name="Invalid Alarm",
-                    time_val=datetime.time(8, 0, 0),
-                    area_id="invalid_area"
-                )
-                assert False, "Expected ValueError was not raised"
-            except ValueError:
-                pass
-
-
+    async def test_invalid_device_ui_update_does_not_partially_mutate(self):
+        from custom_components.alarms.satellite import async_dispatch_command
+        alarm_id = await self.create()
+        before = self.coordinator.serialize_alarms()
+        for fields in ({"name": "Changed", "days": [True]},
+                       {"name": "Changed", "time": "07:00+01:00"},
+                       {"name": "Changed", "snooze_duration": None}):
+            result = await async_dispatch_command(self.coordinator, "satellite-a", {
+                "action": "update", "alarm_id": alarm_id, "fields": fields})
+            self.assertFalse(result["success"])
+            self.assertEqual(self.coordinator.serialize_alarms(), before)
