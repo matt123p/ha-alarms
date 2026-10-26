@@ -70,7 +70,7 @@ class AlarmBaseSwitch(SwitchEntity):
             "name": self.alarm["name"] if self.alarm else "Alarm",
             "manufacturer": "Alarms Integration",
             "model": "Alarm Clock",
-            "sw_version": "1.0.4",
+            "sw_version": "1.0.5",
         }
 
     @property

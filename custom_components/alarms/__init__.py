@@ -171,7 +171,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if "frontend" in hass.config.components:
         from homeassistant.loader import async_get_integration
         integration = await async_get_integration(hass, DOMAIN)
-        version = integration.version or "1.0.4"
+        version = integration.version or "1.0.5"
 
         await panel_custom.async_register_panel(
             hass,

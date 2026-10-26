@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.0.5 - 2026-10-26
 
 - Remove alarm color, sound and speaker preference fields; alarms carry a name, time, days and snooze duration only. Stored alarms drop the removed fields on load.
 - Show only ESPHome devices in the alarm editor's satellite selector, with a searchable lookahead combo.
